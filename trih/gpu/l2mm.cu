@@ -125,7 +125,7 @@ void l2mm_fp16(
   half alpha = __float2half(-2.0f);
   half beta = __float2half(1.0f);
 
-  printf("before cublasGemmEx (FP16) \n");
+  // printf("before cublasGemmEx (FP16) \n");
   
   // Use cublasGemmEx for FP16 computation
   checkCublasStatus(cublasGemmEx(
@@ -142,7 +142,7 @@ void l2mm_fp16(
     CUBLAS_GEMM_DEFAULT_TENSOR_OP // Algorithm using Tensor Cores when possible
   ));
 
-  printf("after cublasGemmEx (FP16) \n");
+  // printf("after cublasGemmEx (FP16) \n");
   
   // Clean up
   checkCublasStatus(cublasDestroy(handle));

@@ -181,21 +181,19 @@ void gpu_anns
   cudaEventElapsedTime(&milliseconds, start, stop);
   printf("l2mm_fp16 kernel execution time: %.3f us\n", milliseconds * 1000.0f);
   
-  // Convert results back to float for the rest of the pipeline
-  float *C_float;
-  cudaMalloc(&C_float, m * n * sizeof(float));
+  // // Convert results back to float for the rest of the pipeline
+  // float *C_float;
+  // cudaMalloc(&C_float, m * n * sizeof(float));
   
-  // Launch kernel to convert from half to float
-  dim3 block(256);
-  dim3 grid((m * n + block.x - 1) / block.x);
+  // // Launch kernel to convert from half to float
+  // dim3 block(256);
+  // dim3 grid((m * n + block.x - 1) / block.x);
   
+  // // Launch the kernel using the triple chevron syntax
+  // half_to_float_kernel<<<grid, block>>>(C, C_float, m * n);
   
-  
-  // Launch the kernel using the triple chevron syntax
-  half_to_float_kernel<<<grid, block>>>(C, C_float, m * n);
-  
-  // Free the half precision result
-  cudaFree(C);
+  // // Free the half precision result
+  // cudaFree(C);
   
 
   /// prepare for reduce_min
@@ -227,10 +225,23 @@ void gpu_anns
   // cudaMalloc(&d_distances_per_query, group_num * query_num * sizeof(float));
   // cudaMalloc(&d_idxs_per_query, group_num * query_num * sizeof(int));
 
+  
+
+  int segment_size = reduce_group_size;
+  int seg_num_per_query = distances_num / segment_size;
+  int segment_num = seg_num_per_query * query_num;
+
+  half* reduced_dists_per_query;
+  int* reduced_ids_per_query;
+  cudaMalloc(&reduced_dists_per_query, segment_num * sizeof(half));
+  cudaMalloc(&reduced_ids_per_query, segment_num * sizeof(int));
+  
   // Start timing using chrono
   auto start_time = std::chrono::high_resolution_clock::now();
+
+  half_matrix_reduce(C, reduced_dists_per_query, reduced_ids_per_query, segment_size, segment_num, seg_num_per_query, 0);
   
-  launchComputeGroupMinimaKernel(C_float, distances_num, query_num, reduce_group_size, d_distances_per_query, d_idxs_per_query, 256);
+  // launchComputeGroupMinimaKernel(C_float, distances_num, query_num, reduce_group_size, d_distances_per_query, d_idxs_per_query, 256);
   cudaStreamSynchronize(0);
   
   // End timing and calculate elapsed time
@@ -239,30 +250,32 @@ void gpu_anns
   printf("Group minima kernel execution time: %.3f us\n", static_cast<float>(duration));
   ///
 
+  segmented_sort_topk_pairs_fp16(reduced_dists_per_query, reduced_ids_per_query, query_num, group_num, phase1_topk);
+
   // return ;
 
   /// compute the phase1 topk
   
 
-  size_t temp_storage_bytes = 0;
-  void* d_temp_storage      = nullptr;
-  CubDebugExit(cub::DeviceRadixSort::SortPairs(d_temp_storage, temp_storage_bytes, distances_per_query[0], idxs_per_query[0], group_num));
-  CubDebugExit(g_allocator.DeviceAllocate(&d_temp_storage, temp_storage_bytes));
+  // size_t temp_storage_bytes = 0;
+  // void* d_temp_storage      = nullptr;
+  // CubDebugExit(cub::DeviceRadixSort::SortPairs(d_temp_storage, temp_storage_bytes, distances_per_query[0], idxs_per_query[0], group_num));
+  // CubDebugExit(g_allocator.DeviceAllocate(&d_temp_storage, temp_storage_bytes));
 
-  // start_time = std::chrono::high_resolution_clock::now();
-  cudaEventRecord(start);
+  // // start_time = std::chrono::high_resolution_clock::now();
+  // cudaEventRecord(start);
 
-  for (size_t i = 0; i < query_num; i++)
-  {
-    CubDebugExit(cub::DeviceRadixSort::SortPairs(d_temp_storage, temp_storage_bytes, distances_per_query[i], idxs_per_query[i], group_num));
-  }
+  // for (size_t i = 0; i < query_num; i++)
+  // {
+  //   CubDebugExit(cub::DeviceRadixSort::SortPairs(d_temp_storage, temp_storage_bytes, distances_per_query[i], idxs_per_query[i], group_num));
+  // }
 
-  cudaEventRecord(stop);
-  cudaEventSynchronize(stop);
+  // cudaEventRecord(stop);
+  // cudaEventSynchronize(stop);
 
-  float milliseconds1 = 0;
-  cudaEventElapsedTime(&milliseconds1, start, stop);
-  printf("Phase1 topk execution time: %.3f us\n", milliseconds1 * 1000.0f);
+  // float milliseconds1 = 0;
+  // cudaEventElapsedTime(&milliseconds1, start, stop);
+  // printf("Phase1 topk execution time: %.3f us\n", milliseconds1 * 1000.0f);
 
   // end_time = std::chrono::high_resolution_clock::now();
   // duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time).count();
@@ -270,44 +283,44 @@ void gpu_anns
   ///
 
   /// allocate memory for phase1 topk
-  float *phase1_distances;
+  half *phase1_distances;
   int *phase1_neighbors;
-  cudaMallocHost(&phase1_distances, query_num * phase1_topk * sizeof(float));
+  cudaMallocHost(&phase1_distances, query_num * phase1_topk * sizeof(half));
   cudaMallocHost(&phase1_neighbors, query_num * phase1_topk * sizeof(int));
   ///
 
   /// copy phase1 topk to CPU
   for (size_t i = 0; i < query_num; i++)
   {
-    cudaMemcpy(phase1_distances + i * phase1_topk, distances_per_query[i].Current(), phase1_topk * sizeof(float), cudaMemcpyDeviceToHost);
-    cudaMemcpy(phase1_neighbors + i * phase1_topk, idxs_per_query[i].Current(), phase1_topk * sizeof(int), cudaMemcpyDeviceToHost);
+    cudaMemcpy(phase1_distances + i * phase1_topk, reduced_dists_per_query + i * group_num, phase1_topk * sizeof(half), cudaMemcpyDeviceToHost);
+    cudaMemcpy(phase1_neighbors + i * phase1_topk, reduced_ids_per_query + i * group_num, phase1_topk * sizeof(int), cudaMemcpyDeviceToHost);
   }
   ///
 
   /// initialize host memory for pdis_per_query and pidx_per_query using cudaMallocHost
-  float **pdis_per_query;
-  int **pidx_per_query;
-  cudaMallocHost(&pdis_per_query, query_num * sizeof(float *));
-  cudaMallocHost(&pidx_per_query, query_num * sizeof(int *));
-  for (size_t i = 0; i < query_num; i++)
-  {
-    pdis_per_query[i] = distances_per_query[i].Current();
-    pidx_per_query[i] = idxs_per_query[i].Current();
-  }
-  ///
+  // float **pdis_per_query;
+  // int **pidx_per_query;
+  // cudaMallocHost(&pdis_per_query, query_num * sizeof(float *));
+  // cudaMallocHost(&pidx_per_query, query_num * sizeof(int *));
+  // for (size_t i = 0; i < query_num; i++)
+  // {
+  //   pdis_per_query[i] = distances_per_query[i].Current();
+  //   pidx_per_query[i] = idxs_per_query[i].Current();
+  // }
+  // ///
 
-  /// copy pdis_per_query and pidx_per_query to GPU
-  cudaMemcpy(d_distances_per_query, pdis_per_query, query_num * sizeof(float *), cudaMemcpyHostToDevice);
-  cudaMemcpy(d_idxs_per_query, pidx_per_query, query_num * sizeof(int *), cudaMemcpyHostToDevice);
-  ///
+  // /// copy pdis_per_query and pidx_per_query to GPU
+  // cudaMemcpy(d_distances_per_query, pdis_per_query, query_num * sizeof(float *), cudaMemcpyHostToDevice);
+  // cudaMemcpy(d_idxs_per_query, pidx_per_query, query_num * sizeof(int *), cudaMemcpyHostToDevice);
+  // ///
 
-  /// compute the exact distances
-  start_time = std::chrono::high_resolution_clock::now();
-  compute_exact_distances(pdis_per_query, pidx_per_query, gpu_src_data, gpu_query, query_num, index.record_num, index.dim, phase1_topk, 1024);
+  // /// compute the exact distances
+  // start_time = std::chrono::high_resolution_clock::now();
+  // compute_exact_distances(pdis_per_query, pidx_per_query, gpu_src_data, gpu_query, query_num, index.record_num, index.dim, phase1_topk, 1024);
   
-  end_time = std::chrono::high_resolution_clock::now();
-  duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time).count();
-  printf("Exact distances execution time: %.3f us\n", static_cast<float>(duration));
+  // end_time = std::chrono::high_resolution_clock::now();
+  // duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time).count();
+  // printf("Exact distances execution time: %.3f us\n", static_cast<float>(duration));
 
 
   ///for each query, check how many ground truth neighbours are in the phase1 topk, first iterate all groud truth neighbours, check if it is in phase1 topk, then calculate the recall

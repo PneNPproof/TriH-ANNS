@@ -129,7 +129,7 @@ int main(int argc, char *argv[]) {
         // recall_test_sq(gdata, index, section_num, top_k);
         
         gpu_warmup();
-        gpu_anns(gdata.test, test_batch_size, gdata.train, index, gdata.distances, (int *)gdata.neighbors, 128, top_k, 100, (int *)gdata.neighbors);
+        gpu_anns(gdata.test, test_batch_size, gdata.train, index, gdata.distances, (int *)gdata.neighbors, 125, top_k, 100, (int *)gdata.neighbors);
 
     }
 

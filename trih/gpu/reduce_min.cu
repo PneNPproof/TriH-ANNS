@@ -11,141 +11,14 @@
 #include <vector>
 
 #include <cuda_runtime.h>
+#include <cooperative_groups.h>
+#include <iostream>
+#include <cassert>
+#include <random>
+#include <cuda_fp16.h> // Add include for half precision support
+#include <cub/cub.cuh>
 
-
-// __global__ void computeGroupMinimalKernel(float *dist, int n, int m, int g, int lda,
-//                        std::vector<float *> minArray, std::vector<int *> indexArray)
-// {
-//   // Compute column and group indices
-//   int num_groups_per_column = (n + g - 1) / g;
-//   int col = blockIdx.x / num_groups_per_column;
-//   int k = blockIdx.x % num_groups_per_column;
-//   if (col >= m)
-//     return;
-
-//   // Compute group boundaries
-//   int start = k * g;
-//   int end = (start + g < n) ? start + g : n;
-//   int num_elements = end - start;
-
-//   int tid = threadIdx.x;
-
-//   // Declare shared memory
-//   extern __shared__ float shared[];
-//   float *shared_val = shared;
-//   int *shared_idx = (int *)(shared + blockDim.x);
-
-//   // Load data into shared memory
-//   if (tid < num_elements)
-//   {
-//     int global_idx = start + tid;
-//     shared_val[tid] = dist[global_idx + col * lda];
-//     shared_idx[tid] = global_idx;
-//   }
-//   else
-//   {
-//     shared_val[tid] = FLT_MAX;
-//     shared_idx[tid] = -1;
-//   }
-//   __syncthreads();
-
-//   // Perform reduction
-//   for (int s = blockDim.x / 2; s > 0; s >>= 1)
-//   {
-//     if (tid < s)
-//     {
-//       if (shared_val[tid + s] < shared_val[tid] ||
-//           (shared_val[tid + s] == shared_val[tid] && shared_idx[tid + s] < shared_idx[tid]))
-//       {
-//         shared_val[tid] = shared_val[tid + s];
-//         shared_idx[tid] = shared_idx[tid + s];
-//       }
-//     }
-//     __syncthreads();
-//   }
-
-//   // Write results
-//   if (tid == 0)
-//   {
-//     minArray[col][k] = shared_val[0];
-//     indexArray[col][k] = shared_idx[0];
-//   }
-// }
-
-
-// template <typename T>
-// using VectorPtr = std::vector<T*>;
-
-// __global__ void computeGroupMinimaKernel(
-//     const float* __restrict__ input,
-//     int n,
-//     int m,
-//     int group_size,
-//     float** output_min,
-//     int** output_idx)
-// {
-//     int num_groups_per_col = (n + group_size - 1) / group_size;
-//     int block_idx = blockIdx.x;
-//     int col = block_idx / num_groups_per_col;
-//     int group = block_idx % num_groups_per_col;
-
-//     if (col >= m) return;
-
-//     int start = group * group_size;
-//     int end = start + group_size;
-//     if (end > n) end = n;
-//     int group_length = end - start;
-
-//     int tid = threadIdx.x;
-
-//     float local_min = FLT_MAX;
-//     int local_idx = -1;
-//     if (tid < group_length) {
-//         int idx = start + tid;
-//         local_min = input[col * n + idx];
-//         local_idx = idx;
-//     }
-
-//     __shared__ float s_min[256];
-//     __shared__ int s_idx[256];
-
-//     s_min[tid] = local_min;
-//     s_idx[tid] = local_idx;
-
-//     __syncthreads();
-
-//     for (int s = blockDim.x / 2; s > 0; s >>= 1) {
-//         if (tid < s) {
-//             if (s_min[tid] > s_min[tid + s]) {
-//                 s_min[tid] = s_min[tid + s];
-//                 s_idx[tid] = s_idx[tid + s];
-//             }
-//         }
-//         __syncthreads();
-//     }
-
-//     if (tid == 0) {
-//         output_min[col][group] = s_min[0];
-//         output_idx[col][group] = s_idx[0];
-//     }
-// }
-
-// void launchComputeGroupMinimaKernel(
-//     const float* d_input,
-//     int n,
-//     int m,
-//     int group_size,
-//     float** d_output_min,
-//     int** d_output_idx)
-// {
-//     int num_groups_per_col = (n + group_size - 1) / group_size;
-//     int total_blocks = m * num_groups_per_col;
-//     int blockSize = 256; // Block size >= group_size
-
-//     computeGroupMinimaKernel<<<total_blocks, blockSize>>>(
-//         d_input, n, m, group_size, d_output_min, d_output_idx);
-// }
-
+namespace cg = cooperative_groups;
 
 __global__ void computeGroupMinimaKernel(
     const float* __restrict__ input,
@@ -233,68 +106,164 @@ void launchComputeGroupMinimaKernel(
     );
 }
 
-// int main() {
-//     const int m = 2; // Number of columns
-//     const int n = 5; // Number of rows
-//     const int group_size = 3;
+__device__ __forceinline__ void warp_reduce_index_only(int& idx, float& min_val) {
+    cg::coalesced_group active = cg::coalesced_threads();
+    for (int i = active.size() / 2; i > 0; i /= 2) {
+        float other_val = active.shfl_down(min_val, i);
+        int other_idx = active.shfl_down(idx, i);
+        if (other_val < min_val || 
+           (other_val == min_val && other_idx < idx)) {
+            min_val = other_val;
+            idx = other_idx;
+        }
+    }
+}
 
-//     // Host input data (column-major)
-//     float h_input[] = {
-//         4.0f, 2.0f, 5.0f, 1.0f, 3.0f, // Column 0
-//         9.0f, 7.0f, 8.0f, 6.0f, 10.0f  // Column 1
-//     };
 
-//     // Allocate device input
-//     float* d_input;
-//     cudaMalloc(&d_input, m * n * sizeof(float));
-//     cudaMemcpy(d_input, h_input, m * n * sizeof(float), cudaMemcpyHostToDevice);
+// each warp process a segment, each thread process segment_size/32 elements
+__global__ void segmented_argmin_kernel_half(
+    const half* __restrict__ distances,
+    half* __restrict__ reduced_dists_per_query,
+    int* __restrict__ reduced_ids_per_query,
+    int segment_size,
+    int segment_num,
+    int seg_num_per_query
+)
+{
+    const int segment_id = blockIdx.x * blockDim.y + threadIdx.y;
+    if (segment_id >= segment_num) return;
 
-//     // Allocate output arrays for each column
-//     int num_groups_per_col = (n + group_size - 1) / group_size;
-//     std::vector<float*> h_output_min(m);
-//     std::vector<int*> h_output_idx(m);
+    // const int query_id = segment_id / SEGMENTS_PER_QUERY;
+    const int local_segment = segment_id % seg_num_per_query;
+    const int base_offset = segment_id * segment_size;
+    const int base_offset_in_query = local_segment * segment_size;
 
-//     for (int i = 0; i < m; ++i) {
-//         cudaMalloc(&h_output_min[i], num_groups_per_col * sizeof(float));
-//         cudaMalloc(&h_output_idx[i], num_groups_per_col * sizeof(int));
-//     }
+    int VEC_SIZE = (segment_size + 31) / 32;
+    float thread_min_val = INFINITY;
+    int thread_min_idx = -1;
 
-//     // Allocate device arrays of pointers
-//     float** d_output_min;
-//     cudaMalloc(&d_output_min, m * sizeof(float*));
-//     cudaMemcpy(d_output_min, h_output_min.data(), m * sizeof(float*), cudaMemcpyHostToDevice);
+    #pragma unroll
+    for (int i = 0; i < segment_size; i += blockDim.x * VEC_SIZE) {
+        const int load_pos = i + threadIdx.x * VEC_SIZE;
+        if (load_pos < segment_size) {
+            // Process 4 elements at a time
+            for (int v = 0; v < VEC_SIZE; ++v) {
+                const int elem_pos = load_pos + v;
+                if (elem_pos < segment_size) {
+                    // Convert half to float for comparison
+                    const float curr_dist = __half2float(distances[base_offset + elem_pos]);
+                    const int curr_idx = base_offset_in_query + elem_pos;
+                    if (curr_dist < thread_min_val) {
+                        thread_min_val = curr_dist;
+                        thread_min_idx = curr_idx;
+                    }
+                }
+            }
+        }
+    }
 
-//     int** d_output_idx;
-//     cudaMalloc(&d_output_idx, m * sizeof(int*));
-//     cudaMemcpy(d_output_idx, h_output_idx.data(), m * sizeof(int*), cudaMemcpyHostToDevice);
+    // Warp reduction - only care about index, but need to track value for comparison
+    warp_reduce_index_only(thread_min_idx, thread_min_val);
 
-//     // Launch kernel
-//     launchComputeGroupMinimaKernel(d_input, n, m, group_size, d_output_min, d_output_idx);
+    if (threadIdx.x == 0) {
+        reduced_ids_per_query[segment_id] = thread_min_idx;
+        reduced_dists_per_query[segment_id] = __float2half(thread_min_val);
+    }
+}
 
-//     // Copy results back to host
-//     for (int col = 0; col < m; ++col) {
-//         std::vector<float> h_min(num_groups_per_col);
-//         cudaMemcpy(h_min.data(), h_output_min[col], num_groups_per_col * sizeof(float), cudaMemcpyDeviceToHost);
 
-//         std::vector<int> h_idx(num_groups_per_col);
-//         cudaMemcpy(h_idx.data(), h_output_idx[col], num_groups_per_col * sizeof(int), cudaMemcpyDeviceToHost);
+void half_matrix_reduce(
+    const half* dists_per_query,
+    half* reduced_dists_per_query,
+    int* reduced_ids_per_query,
+    int segment_size,
+    int segment_num,
+    int seg_num_per_query,
+    cudaStream_t stream
+)
+{
+    dim3 block(32, 32);  // 1024 threads per block
+    dim3 grid((segment_num + block.y - 1) / block.y);
+    
+    segmented_argmin_kernel_half<<<grid, block, 0, stream>>>(dists_per_query, reduced_dists_per_query, reduced_ids_per_query, segment_size, segment_num, seg_num_per_query);
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess) {
+        std::cerr << "Half-precision kernel launch failed: " << cudaGetErrorString(err) << std::endl;
+        exit(EXIT_FAILURE);
+    }
+}
 
-//         std::cout << "Column " << col << ":\n";
-//         std::cout << "Minima: ";
-//         for (float val : h_min) std::cout << val << " ";
-//         std::cout << "\nIndices: ";
-//         for (int idx : h_idx) std::cout << idx << " ";
-//         std::cout << std::endl;
-//     }
+cudaError_t segmented_sort_topk_pairs_fp16(
+    half* reduced_dists,    // [query_num * group_num] in/out - half precision
+    int*  reduced_inds,     // [query_num * group_num] in/out
+    int   query_num,        // number of segments
+    int   group_num,        // length of each segment
+    int   phase1_topk)      // how many elements to extract from each segment
+{
+    // Each query segment is of size group_num
+    // so total elements = query_num * group_num
+    const int total = query_num * group_num;
 
-//     // Free device memory
-//     cudaFree(d_input);
-//     for (int i = 0; i < m; ++i) {
-//         cudaFree(h_output_min[i]);
-//         cudaFree(h_output_idx[i]);
-//     }
-//     cudaFree(d_output_min);
-//     cudaFree(d_output_idx);
+    // Prepare segment offsets
+    std::vector<int> offsets(query_num + 1);
+    for (int i = 0; i <= query_num; ++i) {
+        offsets[i] = i * group_num;
+    }
 
-//     return 0;
-// }
+    int* d_offsets = nullptr;
+    cudaMalloc(&d_offsets, (query_num + 1) * sizeof(int));
+    cudaMemcpy(d_offsets, offsets.data(), (query_num + 1) * sizeof(int), cudaMemcpyHostToDevice);
+
+    // Temporary storage requirements
+    size_t temp_bytes = 0;
+    cub::DeviceSegmentedRadixSort::SortPairs(
+        nullptr, temp_bytes,
+        /* keysIn  */ reduced_dists, /* keysOut  */ reduced_dists,
+        /* valsIn  */ reduced_inds,  /* valsOut  */ reduced_inds,
+        /* numItems */ total,
+        /* numSegments */ query_num,
+        /* beginOffsets */ d_offsets,
+        /* endOffsets   */ d_offsets + 1,
+        /* beginBit, endBit = sort floats fully */ 0, sizeof(float)*8
+    );
+
+    void* d_temp = nullptr;
+    cudaMalloc(&d_temp, temp_bytes);
+
+    // In-place segmented sort by distance (ascending)
+    // Create timing events
+    cudaEvent_t start, stop;
+    cudaEventCreate(&start);
+    cudaEventCreate(&stop);
+    
+    // Record start event
+    cudaEventRecord(start);
+    
+    // Perform the sort
+    cub::DeviceSegmentedRadixSort::SortPairs(
+        d_temp, temp_bytes,
+        reduced_dists, reduced_dists,
+        reduced_inds,  reduced_inds,
+        total,
+        query_num,
+        d_offsets,
+        d_offsets + 1,
+        0, sizeof(float)*8
+    );
+    
+    // Record stop event
+    cudaEventRecord(stop);
+    cudaEventSynchronize(stop);
+    
+    // Calculate elapsed time
+    float milliseconds = 0;
+    cudaEventElapsedTime(&milliseconds, start, stop);
+    printf("Segmented sort time: %.3f ms\n", milliseconds);
+    
+    // Clean up events
+    cudaEventDestroy(start);
+    cudaEventDestroy(stop);
+    cudaError_t err = cudaGetLastError();
+
+    return err;
+}
