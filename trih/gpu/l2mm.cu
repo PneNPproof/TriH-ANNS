@@ -1,0 +1,84 @@
+#include <cublas_v2.h>
+#include <stdexcept>
+
+#include "l2mm.cuh"
+
+inline void checkCublasStatus(cublasStatus_t status)
+{
+  if (status != CUBLAS_STATUS_SUCCESS)
+  {
+    printf("cuBLAS API failed with status %d\n", status);
+    throw std::logic_error("cuBLAS API failed");
+  }
+  // else {
+  //   printf("success cublas call\n");
+  // }
+}
+
+
+/**
+ * @brief Performs matrix multiplication with L2 normalization using cuBLAS
+ *
+ * This function computes C = alpha*A^T*B + beta*C, where alpha=-2.0f and beta=1.0f,
+ * which is a part of L2 distance computation between vectors.
+ *
+ * @param m Number of columns in matrix A
+ * @param n Number of columns in matrix B
+ * @param k Number of rows in both matrices A and B
+ * @param A Pointer to matrix A in device memory
+ * @param B Pointer to matrix B in device memory
+ * @param C Pointer to result matrix C in device memory
+ * @param workspace Pointer to workspace memory (currently unused)
+ * @param workspaceSize Size of workspace in bytes (currently unused)
+ * @param stream CUDA stream to execute the operation in
+ * 
+ * @throw std::logic_error if there's a cuBLAS error
+ */
+void l2mm(
+    int m,
+    int n,
+    int k,
+    const float *A,
+    const float *B,
+    float *C,
+    // void *workspace,
+    // size_t workspaceSize,
+    cudaStream_t stream)
+{
+  // Create and initialize cublas handle
+  cublasHandle_t handle;
+  checkCublasStatus(cublasCreate(&handle));
+  
+  // Set the stream
+  checkCublasStatus(cublasSetStream(handle, stream));
+  
+  // Optional: Enable Tensor Cores if available
+  // checkCublasStatus(cublasSetMathMode(handle, CUBLAS_TENSOR_OP_MATH));
+  
+  // Define constants for the operation C = alpha*A*B + beta*C
+  float alpha = -2.0f;
+  float beta = 1.0f;
+
+  printf("before cublasGemmEx \n");
+  
+  // Use cublasGemmEx similar to bench.cu
+  // We're using CUBLAS_OP_T for A and CUBLAS_OP_N for B
+  checkCublasStatus(cublasGemmEx(
+    handle,
+    CUBLAS_OP_T,              // op_A
+    CUBLAS_OP_N,              // op_B
+    m, n, k,                 // n, m, k dimensions
+    &alpha,                  // alpha = -2.0f
+    A, CUDA_R_32F, k,        // A matrix, data type, leading dimension
+    B, CUDA_R_32F, k,        // B matrix, data type, leading dimension
+    &beta,                   // beta = 1.0f
+    C, CUDA_R_32F, m,        // C matrix (output), data type, leading dimension
+    CUDA_R_32F,              // Computation type
+    CUBLAS_GEMM_DFALT        // Algorithm selection
+  ));
+
+  printf("after cublasGemmEx \n");
+  
+  // Clean up
+  checkCublasStatus(cublasDestroy(handle));
+}

@@ -1,0 +1,41 @@
+# Build directories
+build/
+**/build/
+cmake-build-*/
+
+# Binary files
+*.bin
+*.o
+*.so
+*.a
+*.dll
+*.dylib
+*.exe
+bin/
+lib/
+
+# CUDA specific
+*.i
+*.ii
+*.gpu
+*.ptx
+*.cubin
+*.fatbin
+
+# Editor files
+.vscode/
+*.swp
+*.swo
+*~
+
+# System files
+.DS_Store
+Thumbs.db
+
+# Other
+*.log
+
+# third party
+eigen-3.4.0/
+raft/
+raft_install/
