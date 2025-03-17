@@ -1,7 +1,8 @@
 #pragma once
 
 #include <cuda_runtime.h>  
-#include <stddef.h>        
+#include <stddef.h>
+#include <cuda_fp16.h>        
 
 void l2mm(
   int m,
@@ -10,6 +11,17 @@ void l2mm(
   const float *A,
   const float *B,
   float *C,
+  // void *workspace,
+  // size_t workspaceSize,
+  cudaStream_t stream);
+
+void l2mm_fp16(
+  int m,
+  int n,
+  int k,
+  const half *A,
+  const half *B,
+  half *C,
   // void *workspace,
   // size_t workspaceSize,
   cudaStream_t stream);

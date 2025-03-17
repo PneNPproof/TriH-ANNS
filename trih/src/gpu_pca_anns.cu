@@ -15,6 +15,14 @@
 
 cub::CachingDeviceAllocator g_allocator(true); // Caching allocator for device memory
 
+// Define a kernel to convert half to float
+__global__ void half_to_float_kernel(half* input, float* output, int size) {
+  int idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idx < size) {
+    output[idx] = __half2float(input[idx]);
+  }
+}
+
 void gpu_anns
 (
   float *query,
@@ -83,19 +91,20 @@ void gpu_anns
   cudaFreeHost(temp_norms);
   ///
 
-  /// warmup l2mm function using a small dataset
+  /// warmup l2mm_fp16 function using a small dataset
   {
     int warmup_m = 1024;
     int warmup_n = 32;
     int warmup_k = proj_dim;
     
-    float *warmup_A, *warmup_B, *warmup_C;
-    cudaMalloc(&warmup_A, warmup_m * warmup_k * sizeof(float));
-    cudaMalloc(&warmup_B, warmup_n * warmup_k * sizeof(float));
-    cudaMalloc(&warmup_C, warmup_m * warmup_n * sizeof(float));
+    // Use half precision for FP16 computation
+    half *warmup_A, *warmup_B, *warmup_C;
+    cudaMalloc(&warmup_A, warmup_m * warmup_k * sizeof(half));
+    cudaMalloc(&warmup_B, warmup_n * warmup_k * sizeof(half));
+    cudaMalloc(&warmup_C, warmup_m * warmup_n * sizeof(half));
     
-    // Run the kernel once to warm up the GPU
-    l2mm(warmup_m, warmup_n, warmup_k, warmup_A, warmup_B, warmup_C, 0);
+    // Run the kernel once to warm up the GPU using FP16 version
+    l2mm_fp16(warmup_m, warmup_n, warmup_k, warmup_A, warmup_B, warmup_C, 0);
     
     // Ensure warmup is complete
     cudaDeviceSynchronize();
@@ -105,8 +114,9 @@ void gpu_anns
     cudaFree(warmup_B);
     cudaFree(warmup_C);
     
-    printf("GPU warmup completed\n");
+    printf("GPU warmup for FP16 computation completed\n");
   }
+  
 
   /// compute l2 distances
   int m = index.record_num;
@@ -114,20 +124,43 @@ void gpu_anns
   int k = proj_dim;
   /// allocate memory for A, B, C in GPU, and copy data from CPU to GPU
   // A: proj_data, B: query_proj, C: data_norms
-  float *A, *B, *C;
-  cudaMalloc(&A, m * k * sizeof(float));
-  cudaMalloc(&B, n * k * sizeof(float));
-  cudaMalloc(&C, m * n * sizeof(float));
+  half *A, *B, *C;
+  cudaMalloc(&A, m * k * sizeof(half));
+  cudaMalloc(&B, n * k * sizeof(half));
+  cudaMalloc(&C, m * n * sizeof(half));
   
-  cudaMemcpy(A, proj_data, m * k * sizeof(float), cudaMemcpyHostToDevice);
-  cudaMemcpy(B, query_proj, n * k * sizeof(float), cudaMemcpyHostToDevice);
-  cudaMemcpy(C, data_norms, m * n * sizeof(float), cudaMemcpyHostToDevice);
-  // allocate workspace
-  // void *workspace;
-  // size_t workspaceSize = (size_t)1024 * 1024 * 1024 * 8;
-  // cudaMalloc(&workspace, workspaceSize);
+  // Convert float data to half precision
+  half *h_A, *h_B, *h_C;
+  cudaMallocHost(&h_A, m * k * sizeof(half));
+  cudaMallocHost(&h_B, n * k * sizeof(half));
+  cudaMallocHost(&h_C, m * n * sizeof(half));
   
-  // Record start event using both CUDA events and C++ chrono
+  // Convert proj_data to half
+  for (int i = 0; i < m * k; i++) {
+    h_A[i] = __float2half(proj_data[i]);
+  }
+  
+  // Convert query_proj to half
+  for (int i = 0; i < n * k; i++) {
+    h_B[i] = __float2half(query_proj[i]);
+  }
+  
+  // Convert data_norms to half
+  for (int i = 0; i < m * n; i++) {
+    h_C[i] = __float2half(data_norms[i]);
+  }
+  
+  // Copy the half precision data to GPU
+  cudaMemcpy(A, h_A, m * k * sizeof(half), cudaMemcpyHostToDevice);
+  cudaMemcpy(B, h_B, n * k * sizeof(half), cudaMemcpyHostToDevice);
+  cudaMemcpy(C, h_C, m * n * sizeof(half), cudaMemcpyHostToDevice);
+  
+  // Free host half precision buffers
+  cudaFreeHost(h_A);
+  cudaFreeHost(h_B);
+  cudaFreeHost(h_C);
+  
+  // Record start event using both CUDA events
   // Create CUDA events for timing
   cudaEvent_t start, stop;
   cudaEventCreate(&start);
@@ -136,7 +169,8 @@ void gpu_anns
   // Record start event
   cudaEventRecord(start, 0);
   
-  l2mm(m, n, k, A, B, C, 0);
+  // Use l2mm_fp16 instead of l2mm
+  l2mm_fp16(m, n, k, A, B, C, 0);
   
   // Record stop event
   cudaEventRecord(stop, 0);
@@ -145,19 +179,23 @@ void gpu_anns
   // Calculate elapsed time
   float milliseconds = 0;
   cudaEventElapsedTime(&milliseconds, start, stop);
-  printf("l2mm kernel execution time: %.3f us\n", milliseconds * 1000.0f);
+  printf("l2mm_fp16 kernel execution time: %.3f us\n", milliseconds * 1000.0f);
+  
+  // Convert results back to float for the rest of the pipeline
+  float *C_float;
+  cudaMalloc(&C_float, m * n * sizeof(float));
+  
+  // Launch kernel to convert from half to float
+  dim3 block(256);
+  dim3 grid((m * n + block.x - 1) / block.x);
   
   
   
+  // Launch the kernel using the triple chevron syntax
+  half_to_float_kernel<<<grid, block>>>(C, C_float, m * n);
   
-  // copy C to CPU and print the first 10 elements
-  // float *l2_distances;
-  // cudaMallocHost(&l2_distances, m * n * sizeof(float));
-  // printf("Copying C to CPU...\n");
-  // cudaMemcpy(l2_distances, C, m * n * sizeof(float), cudaMemcpyDeviceToHost);
-  // for (int i = 0; i < 10; i++) {
-  //   printf("l2_distances[%d]: %.3f\n", i, l2_distances[i]);
-  // }
+  // Free the half precision result
+  cudaFree(C);
   
 
   /// prepare for reduce_min
@@ -192,7 +230,7 @@ void gpu_anns
   // Start timing using chrono
   auto start_time = std::chrono::high_resolution_clock::now();
   
-  launchComputeGroupMinimaKernel(C, distances_num, query_num, reduce_group_size, d_distances_per_query, d_idxs_per_query, 256);
+  launchComputeGroupMinimaKernel(C_float, distances_num, query_num, reduce_group_size, d_distances_per_query, d_idxs_per_query, 256);
   cudaStreamSynchronize(0);
   
   // End timing and calculate elapsed time
