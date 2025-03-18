@@ -220,13 +220,6 @@ void gpu_anns
     cudaMemcpy(d_idxs_per_query + i, &idxs_per_query[i].d_buffers[idxs_per_query[i].selector], sizeof(int *), cudaMemcpyHostToDevice);
   }
 
-  // float *d_distances_per_query;
-  // int *d_idxs_per_query;
-  // cudaMalloc(&d_distances_per_query, group_num * query_num * sizeof(float));
-  // cudaMalloc(&d_idxs_per_query, group_num * query_num * sizeof(int));
-
-  
-
   int segment_size = reduce_group_size;
   int seg_num_per_query = distances_num / segment_size;
   int segment_num = seg_num_per_query * query_num;
@@ -252,35 +245,16 @@ void gpu_anns
 
   segmented_sort_topk_pairs_fp16(reduced_dists_per_query, reduced_ids_per_query, query_num, group_num, phase1_topk);
 
-  // return ;
-
-  /// compute the phase1 topk
   
 
-  // size_t temp_storage_bytes = 0;
-  // void* d_temp_storage      = nullptr;
-  // CubDebugExit(cub::DeviceRadixSort::SortPairs(d_temp_storage, temp_storage_bytes, distances_per_query[0], idxs_per_query[0], group_num));
-  // CubDebugExit(g_allocator.DeviceAllocate(&d_temp_storage, temp_storage_bytes));
+  /// compute the phase1 topk
+  half *phase1_distances_d;
+  int *phase1_neighbors_d;
+  cudaMalloc(&phase1_distances_d, query_num * phase1_topk * sizeof(half));
+  cudaMalloc(&phase1_neighbors_d, query_num * phase1_topk * sizeof(int));
 
-  // // start_time = std::chrono::high_resolution_clock::now();
-  // cudaEventRecord(start);
+  extract_topk(reduced_dists_per_query, reduced_ids_per_query, phase1_distances_d, phase1_neighbors_d, query_num, group_num, phase1_topk, 0, true);
 
-  // for (size_t i = 0; i < query_num; i++)
-  // {
-  //   CubDebugExit(cub::DeviceRadixSort::SortPairs(d_temp_storage, temp_storage_bytes, distances_per_query[i], idxs_per_query[i], group_num));
-  // }
-
-  // cudaEventRecord(stop);
-  // cudaEventSynchronize(stop);
-
-  // float milliseconds1 = 0;
-  // cudaEventElapsedTime(&milliseconds1, start, stop);
-  // printf("Phase1 topk execution time: %.3f us\n", milliseconds1 * 1000.0f);
-
-  // end_time = std::chrono::high_resolution_clock::now();
-  // duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time).count();
-  // printf("Phase1 topk execution time: %.3f us\n", static_cast<float>(duration));
-  ///
 
   /// allocate memory for phase1 topk
   half *phase1_distances;
@@ -290,39 +264,11 @@ void gpu_anns
   ///
 
   /// copy phase1 topk to CPU
-  for (size_t i = 0; i < query_num; i++)
-  {
-    cudaMemcpy(phase1_distances + i * phase1_topk, reduced_dists_per_query + i * group_num, phase1_topk * sizeof(half), cudaMemcpyDeviceToHost);
-    cudaMemcpy(phase1_neighbors + i * phase1_topk, reduced_ids_per_query + i * group_num, phase1_topk * sizeof(int), cudaMemcpyDeviceToHost);
-  }
+  cudaMemcpy(phase1_distances, phase1_distances_d, query_num * phase1_topk * sizeof(half), cudaMemcpyDeviceToHost);
+  cudaMemcpy(phase1_neighbors, phase1_neighbors_d, query_num * phase1_topk * sizeof(int), cudaMemcpyDeviceToHost);
   ///
 
-  /// initialize host memory for pdis_per_query and pidx_per_query using cudaMallocHost
-  // float **pdis_per_query;
-  // int **pidx_per_query;
-  // cudaMallocHost(&pdis_per_query, query_num * sizeof(float *));
-  // cudaMallocHost(&pidx_per_query, query_num * sizeof(int *));
-  // for (size_t i = 0; i < query_num; i++)
-  // {
-  //   pdis_per_query[i] = distances_per_query[i].Current();
-  //   pidx_per_query[i] = idxs_per_query[i].Current();
-  // }
-  // ///
-
-  // /// copy pdis_per_query and pidx_per_query to GPU
-  // cudaMemcpy(d_distances_per_query, pdis_per_query, query_num * sizeof(float *), cudaMemcpyHostToDevice);
-  // cudaMemcpy(d_idxs_per_query, pidx_per_query, query_num * sizeof(int *), cudaMemcpyHostToDevice);
-  // ///
-
-  // /// compute the exact distances
-  // start_time = std::chrono::high_resolution_clock::now();
-  // compute_exact_distances(pdis_per_query, pidx_per_query, gpu_src_data, gpu_query, query_num, index.record_num, index.dim, phase1_topk, 1024);
   
-  // end_time = std::chrono::high_resolution_clock::now();
-  // duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time).count();
-  // printf("Exact distances execution time: %.3f us\n", static_cast<float>(duration));
-
-
   ///for each query, check how many ground truth neighbours are in the phase1 topk, first iterate all groud truth neighbours, check if it is in phase1 topk, then calculate the recall
   
   float total_recall = 0.0f;

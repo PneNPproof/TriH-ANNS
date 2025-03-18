@@ -267,3 +267,113 @@ cudaError_t segmented_sort_topk_pairs_fp16(
 
     return err;
 }
+
+// Extract topk kernel
+__global__ void extract_topk_kernel(
+    half *reduced_dists,
+    int *reduced_ids,
+    half *topk_dists,
+    int *topk_ids,
+    int group_num,
+    int topk)
+{
+    // One block per query
+    const int query_idx = blockIdx.x;
+    const int tid = threadIdx.x;
+    const int block_size = blockDim.x;
+    
+    // Calculate how many turns needed to process all topk elements
+    const int turns = (topk + block_size - 1) / block_size;
+    
+    // Process multiple elements per thread across multiple turns
+    for (int turn = 0; turn < turns; turn++) {
+        const int k = turn * block_size + tid;
+        
+        // Check if this thread should process an element in this turn
+        if (k < topk) {
+            const int src_idx = query_idx * group_num + k;
+            const int dst_idx = query_idx * topk + k;
+            
+            // Extract the k-th nearest neighbor
+            topk_dists[dst_idx] = reduced_dists[src_idx];
+            topk_ids[dst_idx] = reduced_ids[src_idx];
+        }
+    }
+}
+
+
+/**
+ * @brief Extracts the top-k elements from each query segment after sorting
+ * 
+ * @param reduced_dists Sorted distances array [query_num * group_num]
+ * @param reduced_ids Sorted indices array [query_num * group_num]
+ * @param topk_dists Output array for top-k distances [query_num * topk]
+ * @param topk_ids Output array for top-k indices [query_num * topk]
+ * @param query_num Number of query segments
+ * @param group_num Length of each segment
+ * @param topk Number of elements to extract from each segment
+ * @param stream CUDA stream (optional)
+ * @param enable_timing Whether to measure and report kernel execution time
+ * @return cudaError_t Error code
+ */
+cudaError_t extract_topk(
+    half* reduced_dists,
+    int* reduced_ids,
+    half* topk_dists,
+    int* topk_ids,
+    int query_num,
+    int group_num, 
+    int topk,
+    cudaStream_t stream = 0,
+    bool enable_timing = false)
+{
+    // Validate inputs
+    if (topk > group_num) {
+        std::cerr << "Error: topk (" << topk << ") cannot be larger than group_num (" 
+                  << group_num << ")" << std::endl;
+        return cudaErrorInvalidValue;
+    }
+
+    // Configure kernel launch parameters
+    // One thread block per query, each thread processes one element
+    dim3 grid(query_num);
+    dim3 block(256); // Ensure block size doesn't exceed 1024
+
+    // Create timing events if requested
+    cudaEvent_t start, stop;
+    if (enable_timing) {
+        cudaEventCreate(&start);
+        cudaEventCreate(&stop);
+        cudaEventRecord(start, stream);
+    }
+
+    // Launch kernel
+    extract_topk_kernel<<<grid, block, 0, stream>>>(
+        reduced_dists,
+        reduced_ids,
+        topk_dists,
+        topk_ids,
+        group_num,
+        topk
+    );
+
+    // Measure execution time if requested
+    if (enable_timing) {
+        cudaEventRecord(stop, stream);
+        cudaEventSynchronize(stop);
+        float milliseconds = 0;
+        cudaEventElapsedTime(&milliseconds, start, stop);
+        printf("Extract top-k time: %.3f ms\n", milliseconds);
+        cudaEventDestroy(start);
+        cudaEventDestroy(stop);
+    }
+
+    // Check for errors
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess) {
+        std::cerr << "Extract top-k kernel launch failed: " 
+                  << cudaGetErrorString(err) << std::endl;
+    }
+
+    return err;
+}
