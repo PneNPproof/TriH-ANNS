@@ -69,4 +69,12 @@ set(CMAKE_BUILD_TYPE Release)
 #     POSITION_INDEPENDENT_CODE ON
 # )
 
+add_compile_options(
+    "-O3"
+    "-mavx512f"         # 启用AVX-512基础指令集
+    "-march=native"     # 针对本地CPU架构优化
+    "-ffast-math"       # 启用快速数学优化
+)
+
+
 add_subdirectory(trih)

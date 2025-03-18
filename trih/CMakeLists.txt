@@ -5,7 +5,7 @@
 # set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 set(EIGEN3_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/eigen-3.4.0 CACHE PATH "Path to Eigen3 headers")
-include_directories(${EIGEN3_INCLUDE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/gpu)
+include_directories(${EIGEN3_INCLUDE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/gpu ${CMAKE_CURRENT_SOURCE_DIR}/src)
 include_directories(/usr/include/hdf5/serial)
 # set(CMAKE_CUDA_ARCHITECTURES 80)
 
@@ -19,7 +19,8 @@ link_directories("/usr/lib/x86_64-linux-gnu/hdf5/serial")
 
 set(TARGET_NAME pca)
 
-add_executable(${TARGET_NAME} src/main.cu 
+add_executable(${TARGET_NAME} 
+                src/main.cu 
                 src/pca.cpp 
                 src/search.cpp 
                 src/gist.cpp 
@@ -28,7 +29,9 @@ add_executable(${TARGET_NAME} src/main.cu
                 src/gpu_pca_anns.cu 
                 gpu/l2mm.cu 
                 gpu/reduce_min.cu
-                gpu/rerank.cu)
+                gpu/rerank.cu
+                src/rerank.cpp
+                )
 
 target_include_directories(${TARGET_NAME} PRIVATE
     ${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES}

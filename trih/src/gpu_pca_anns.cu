@@ -5,6 +5,8 @@
 #include "l2mm.cuh"
 #include "reduce_min.cuh"
 #include "rerank.cuh"
+#include "thread_pool.h"
+#include "rerank.h"
 
 #include <cuda_runtime.h>
 #include <cub/util_allocator.cuh>
@@ -13,7 +15,7 @@
 
 #include <vector>
 
-cub::CachingDeviceAllocator g_allocator(true); // Caching allocator for device memory
+
 
 // Define a kernel to convert half to float
 __global__ void half_to_float_kernel(half* input, float* output, int size) {
@@ -37,6 +39,54 @@ void gpu_anns
   int *ground_truth_neighbors
 )
 {
+
+  // Define alignment boundary - 64 bytes (typical cache line size)
+  constexpr size_t alignment = 64;
+  
+  // Create aligned copies of the input data
+  float *aligned_query = nullptr;
+  float *aligned_src_data = nullptr;
+  
+  // Calculate sizes and ensure they're multiples of alignment
+  size_t query_size = query_num * index.dim * sizeof(float);
+  size_t src_data_size = index.record_num * index.dim * sizeof(float);
+  
+  // Allocate aligned memory
+  #if defined(_MSC_VER)
+    // Windows aligned allocation
+    aligned_query = (float*)_aligned_malloc(query_size, alignment);
+    aligned_src_data = (float*)_aligned_malloc(src_data_size, alignment);
+  #else
+    // POSIX aligned allocation
+    aligned_query = (float*)aligned_alloc(alignment, query_size);
+    aligned_src_data = (float*)aligned_alloc(alignment, src_data_size);
+  #endif
+  
+  if (!aligned_query || !aligned_src_data) {
+    printf("ERROR: Failed to allocate aligned memory\n");
+    return;
+  }
+  
+  // Copy data to aligned memory
+  memcpy(aligned_query, query, query_size);
+  memcpy(aligned_src_data, src_data, src_data_size);
+
+  query = aligned_query;
+  src_data = aligned_src_data;
+
+  /// calculate squared norms for src_data
+  float *src_data_norms;
+  cudaMallocHost(&src_data_norms, index.record_num * sizeof(float));
+  for (int i = 0; i < index.record_num; i++)
+  {
+    src_data_norms[i] = 0;
+    for (int j = 0; j < index.dim; j++)
+    {
+      src_data_norms[i] += src_data[i * index.dim + j] * src_data[i * index.dim + j];
+    }
+  }
+  ///
+
   float *gpu_src_data;
   float *gpu_query;
 
@@ -181,44 +231,9 @@ void gpu_anns
   cudaEventElapsedTime(&milliseconds, start, stop);
   printf("l2mm_fp16 kernel execution time: %.3f us\n", milliseconds * 1000.0f);
   
-  // // Convert results back to float for the rest of the pipeline
-  // float *C_float;
-  // cudaMalloc(&C_float, m * n * sizeof(float));
-  
-  // // Launch kernel to convert from half to float
-  // dim3 block(256);
-  // dim3 grid((m * n + block.x - 1) / block.x);
-  
-  // // Launch the kernel using the triple chevron syntax
-  // half_to_float_kernel<<<grid, block>>>(C, C_float, m * n);
-  
-  // // Free the half precision result
-  // cudaFree(C);
-  
-
   /// prepare for reduce_min
   auto distances_num = m;
   auto group_num = (distances_num + reduce_group_size - 1) / reduce_group_size;
-
-  std::vector<cub::DoubleBuffer<float>> distances_per_query(query_num);
-  std::vector<cub::DoubleBuffer<int>> idxs_per_query(query_num);
-
-  for (size_t i = 0; i < query_num; i++)
-  {
-    CubDebugExit(g_allocator.DeviceAllocate((void **)&distances_per_query[i].d_buffers[0], group_num * sizeof(float)));
-    CubDebugExit(g_allocator.DeviceAllocate((void **)&distances_per_query[i].d_buffers[1], group_num * sizeof(float)));
-    CubDebugExit(g_allocator.DeviceAllocate((void **)&idxs_per_query[i].d_buffers[0], group_num * sizeof(int)));
-    CubDebugExit(g_allocator.DeviceAllocate((void **)&idxs_per_query[i].d_buffers[1], group_num * sizeof(int)));
-  }
-  float **d_distances_per_query;
-  int **d_idxs_per_query;
-  cudaMalloc(&d_distances_per_query, query_num * sizeof(float *));
-  cudaMalloc(&d_idxs_per_query, query_num * sizeof(int *));
-  for (size_t i = 0; i < query_num; i++)
-  {
-    cudaMemcpy(d_distances_per_query + i, &distances_per_query[i].d_buffers[distances_per_query[i].selector], sizeof(float *), cudaMemcpyHostToDevice);
-    cudaMemcpy(d_idxs_per_query + i, &idxs_per_query[i].d_buffers[idxs_per_query[i].selector], sizeof(int *), cudaMemcpyHostToDevice);
-  }
 
   int segment_size = reduce_group_size;
   int seg_num_per_query = distances_num / segment_size;
@@ -268,18 +283,56 @@ void gpu_anns
   cudaMemcpy(phase1_neighbors, phase1_neighbors_d, query_num * phase1_topk * sizeof(int), cudaMemcpyDeviceToHost);
   ///
 
+  ThreadPool pool(12);
+  std::vector<std::future<int>> results;
+
+  // allocate memory for phase2 topk
+  int *phase2_neighbors;
+  cudaMallocHost(&phase2_neighbors, query_num * phase2_topk * sizeof(int));
+
+  // Start timing re-ranking phase
+  auto rerank_start = std::chrono::high_resolution_clock::now();
+
+  for (int i=0; i<query_num; i++)
+  {
+    results.emplace_back(
+      pool.enqueue(
+        re_rank, 
+        src_data, 
+        src_data_norms,
+        query + i * index.dim,
+        phase1_neighbors + i * phase1_topk,
+        phase1_topk,
+        index.record_num,
+        index.dim,
+        phase2_topk,
+        phase2_neighbors + i * phase2_topk
+      )
+    );
+  }
+
+  for (auto && result: results)
+  {
+    result.get();
+  }
   
-  ///for each query, check how many ground truth neighbours are in the phase1 topk, first iterate all groud truth neighbours, check if it is in phase1 topk, then calculate the recall
-  
+  // End timing and calculate elapsed time
+  auto rerank_end = std::chrono::high_resolution_clock::now();
+  auto rerank_duration = std::chrono::duration_cast<std::chrono::microseconds>(rerank_end - rerank_start).count();
+  printf("Re-ranking phase execution time: %.3f us\n", static_cast<float>(rerank_duration));
+
   float total_recall = 0.0f;
   for (size_t i = 0; i < query_num; i++)
   {
+    // printf("Query %d \n", i);
     int total_found = 0;
     for (size_t j = 0; j < phase2_topk; j++)
     {
-      for (size_t k = 0; k < phase1_topk; k++)
+      // printf("j %d, %d\n", j, ground_truth_neighbors[i * phase2_topk + j]);
+      for (size_t k = 0; k < phase2_topk; k++)
       {
-        if (phase1_neighbors[i * phase1_topk + k] == ground_truth_neighbors[i * phase2_topk + j])
+        // printf("k %d, %d\n", k, phase2_neighbors[i * phase1_topk + k]);
+        if (phase2_neighbors[i * phase2_topk + k] == ground_truth_neighbors[i * phase2_topk + j])
         {
           total_found++;
           break;
@@ -294,6 +347,32 @@ void gpu_anns
   
   float avg_recall = total_recall / query_num;
   printf("Average recall: %.4f\n", avg_recall);
+  
+  ///for each query, check how many ground truth neighbours are in the phase1 topk, first iterate all groud truth neighbours, check if it is in phase1 topk, then calculate the recall
+  
+  // float total_recall_2 = 0.0f;
+  // for (size_t i = 0; i < query_num; i++)
+  // {
+  //   int total_found = 0;
+  //   for (size_t j = 0; j < phase2_topk; j++)
+  //   {
+  //     for (size_t k = 0; k < phase1_topk; k++)
+  //     {
+  //       if (phase1_neighbors[i * phase1_topk + k] == ground_truth_neighbors[i * phase2_topk + j])
+  //       {
+  //         total_found++;
+  //         break;
+  //       }
+  //     }
+  //   }
+
+  //   float recall = static_cast<float>(total_found) / phase2_topk;
+  //   total_recall_2 += recall;
+  //   // printf("Recall for query %d: %.3f\n", i, recall);
+  // }
+  
+  // float avg_recall_2 = total_recall_2 / query_num;
+  // printf("Average recall: %.4f\n", avg_recall_2);
   
 
   
