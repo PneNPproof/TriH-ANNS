@@ -129,8 +129,28 @@ int main(int argc, char *argv[]) {
         // recall_test_sq(gdata, index, section_num, top_k);
         
         gpu_warmup();
-        gpu_anns(gdata.test, test_batch_size, gdata.train, index, gdata.distances, (int *)gdata.neighbors, 125, top_k, 100, (int *)gdata.neighbors);
+        // gpu_anns(gdata.test, test_batch_size, gdata.train, index, gdata.distances, (int *)gdata.neighbors, 125, top_k, 100, (int *)gdata.neighbors);
 
+        TrihAnnsWorker worker(
+            index.pca_data,
+            gdata.train, 
+            index.trans_data,
+            index.record_num,
+            1000,
+            index.dim,
+            index.column_num,
+            125,
+            8000,
+            top_k,
+            100,
+            0
+        );
+
+        worker.batch_query_search(
+            gdata.test,
+            test_batch_size,
+            (int *)gdata.neighbors
+        );
     }
 
     return 0;

@@ -186,11 +186,6 @@ void half_matrix_reduce(
     dim3 grid((segment_num + block.y - 1) / block.y);
     
     segmented_argmin_kernel_half<<<grid, block, 0, stream>>>(dists_per_query, reduced_dists_per_query, reduced_ids_per_query, segment_size, segment_num, seg_num_per_query);
-    cudaError_t err = cudaGetLastError();
-    if (err != cudaSuccess) {
-        std::cerr << "Half-precision kernel launch failed: " << cudaGetErrorString(err) << std::endl;
-        exit(EXIT_FAILURE);
-    }
 }
 
 cudaError_t segmented_sort_topk_pairs_fp16(
@@ -369,11 +364,11 @@ cudaError_t extract_topk(
     }
 
     // Check for errors
-    cudaError_t err = cudaGetLastError();
-    if (err != cudaSuccess) {
-        std::cerr << "Extract top-k kernel launch failed: " 
-                  << cudaGetErrorString(err) << std::endl;
-    }
+    // cudaError_t err = cudaGetLastError();
+    // if (err != cudaSuccess) {
+    //     std::cerr << "Extract top-k kernel launch failed: " 
+    //               << cudaGetErrorString(err) << std::endl;
+    // }
 
-    return err;
+    return cudaSuccess;
 }

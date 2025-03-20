@@ -34,6 +34,7 @@ Thumbs.db
 
 # Other
 *.log
+log/
 
 # third party
 eigen-3.4.0/

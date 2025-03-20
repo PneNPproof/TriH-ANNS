@@ -4,6 +4,28 @@
 
 #include "l2mm.cuh"
 
+// CUDA kernel to add vector B to vector A and store the result in A
+__global__ void addVectorsKernel(half* A, const half* B, int n) {
+  // Calculate the global thread index
+  int idx = blockIdx.x * blockDim.x + threadIdx.x;
+
+  // Process elements within bounds
+  if (idx < n) {
+      A[idx] = __hadd(A[idx], B[idx]); // Use CUDA's intrinsic for FP16 addition
+  }
+}
+
+void addVectors(half* d_A, const half* d_B, int n, cudaStream_t stream) {
+  // Define block and grid sizes
+  int blockSize = 256; // Threads per block
+  int gridSize = (n + blockSize - 1) / blockSize; // Grid size to cover all elements
+
+  // Launch the kernel
+  addVectorsKernel<<<gridSize, blockSize, 0, stream>>>(d_A, d_B, n);
+}
+
+
+
 inline void checkCublasStatus(cublasStatus_t status)
 {
   if (status != CUBLAS_STATUS_SUCCESS)

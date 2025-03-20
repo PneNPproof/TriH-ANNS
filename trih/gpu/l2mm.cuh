@@ -2,7 +2,9 @@
 
 #include <cuda_runtime.h>  
 #include <stddef.h>
-#include <cuda_fp16.h>        
+#include <cuda_fp16.h>
+
+void addVectors(half* d_A, const half* d_B, int n, cudaStream_t stream);
 
 void l2mm(
   int m,
