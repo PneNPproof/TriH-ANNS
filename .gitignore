@@ -42,3 +42,9 @@ log/
 eigen-3.4.0/
 raft/
 raft_install/
+
+
+examples/
+test/
+library/
+profiler/
