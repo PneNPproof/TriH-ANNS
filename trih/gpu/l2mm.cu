@@ -24,8 +24,6 @@ void addVectors(half* d_A, const half* d_B, int n, cudaStream_t stream) {
   addVectorsKernel<<<gridSize, blockSize, 0, stream>>>(d_A, d_B, n);
 }
 
-
-
 inline void checkCublasStatus(cublasStatus_t status)
 {
   if (status != CUBLAS_STATUS_SUCCESS)
@@ -169,3 +167,5 @@ void l2mm_fp16(
   // Clean up
   checkCublasStatus(cublasDestroy(handle));
 }
+
+

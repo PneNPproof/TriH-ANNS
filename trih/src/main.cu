@@ -143,7 +143,20 @@ int main(int argc, char *argv[]) {
             8000,
             top_k,
             100,
-            0
+            0,
+            20
+        );
+
+        // randomly generate batch_query, 
+        float *batch_query = (float *)aligned_alloc(64, test_batch_size * index.dim * sizeof(float));
+        for(int i = 0; i < test_batch_size * index.dim; i++) {
+            batch_query[i] = rand() / (float)RAND_MAX;
+        }
+
+        worker.batch_query_search(
+            batch_query,
+            test_batch_size,
+            (int *)gdata.neighbors
         );
 
         worker.batch_query_search(

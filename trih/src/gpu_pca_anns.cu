@@ -5,7 +5,6 @@
 #include "l2mm.cuh"
 #include "reduce_min.cuh"
 #include "rerank.cuh"
-#include "thread_pool.h"
 #include "rerank.h"
 
 #include <cuda_runtime.h>
@@ -17,8 +16,6 @@
 #include <cublas_v2.h>
 
 #include <vector>
-
-
 
 // Define a kernel to convert half to float
 __global__ void half_to_float_kernel(half* input, float* output, int size) {
@@ -534,9 +531,16 @@ TrihAnnsWorker::TrihAnnsWorker
   int reduce_group_num_,
   int phase1_topk_,
   int phase2_topk_,
-  cudaStream_t work_stream_
-)
+  cudaStream_t work_stream_,
+  int re_rank_thread_pool_size_
+):
+gemm_workspace(1024 * 1024 * 1024)
 {
+  alpha = ElementOutput(-2);
+  beta = ElementOutput(1);
+
+  rerank_thread_pool = new ThreadPool(re_rank_thread_pool_size_);
+
   data_num = data_num_;
   max_queries_num = max_queries_num_;
   dim = dim_;
@@ -570,6 +574,12 @@ TrihAnnsWorker::TrihAnnsWorker
   cudaFreeHost(pca_dim_pca_data_h);
   ///
 
+  /// transform pca_dim_pca_data_d to half precision
+  cudaMalloc(&half_pca_dim_pca_data_d, pca_dim * dim * sizeof(half));
+  float_to_half_kernel<<<(pca_dim * dim + 255) / 256, 256, 0, work_stream>>>(pca_dim_pca_data_d, half_pca_dim_pca_data_d, pca_dim * dim);
+  cudaStreamSynchronize(work_stream);
+  ///
+
 
 
   /// calculate squared norms for base_dataset_h
@@ -589,19 +599,19 @@ TrihAnnsWorker::TrihAnnsWorker
   cudaMemcpy(full_dim_pca_data_d, full_dim_pca_data_h, dim * dim * sizeof(float), cudaMemcpyHostToDevice);
   ///
 
-  /// allocate memory for batch_query_d, pca_batch_query_d
+  /// allocate memory for batch_query_d, pca_batch_query_d, half_batch_query_d
   cudaMalloc(&batch_query_d, max_queries_num * dim * sizeof(float));
   cudaMalloc(&pca_batch_query_d, max_queries_num * pca_dim * sizeof(float));
-  // cudaMalloc(&half_batch_query_d, max_queries_num * dim * sizeof(half));
+  cudaMalloc(&half_batch_query_d, max_queries_num * dim * sizeof(half));
   ///
 
   /// allocate memory for alpha0_d, beta0_d
-  cudaMalloc(&alpha0_d, sizeof(float));
-  cudaMalloc(&beta0_d, sizeof(float));
-  auto alpha0 = 1.0f;
-  auto beta0 = 0.0f;
-  cudaMemcpy(alpha0_d, &alpha0, sizeof(float), cudaMemcpyHostToDevice);
-  cudaMemcpy(beta0_d, &beta0, sizeof(float), cudaMemcpyHostToDevice);
+  cudaMalloc(&alpha0_d, sizeof(half));
+  cudaMalloc(&beta0_d, sizeof(half));
+  auto alpha0 = __float2half(1.0f);
+  auto beta0 = __float2half(0.0f);
+  cudaMemcpy(alpha0_d, &alpha0, sizeof(half), cudaMemcpyHostToDevice);
+  cudaMemcpy(beta0_d, &beta0, sizeof(half), cudaMemcpyHostToDevice);
   ///
 
   /// calculate squared norms for pca_dataset_h
@@ -665,6 +675,7 @@ TrihAnnsWorker::TrihAnnsWorker
   /// create cublas handle
   cublasCreate(&handle);
   cublasSetStream(handle, work_stream);
+  cublasSetPointerMode(handle, CUBLAS_POINTER_MODE_DEVICE);
   ///
 
   /// allocate memory for reduced_dists_per_query_d, reduced_ids_per_query_d
@@ -723,18 +734,6 @@ TrihAnnsWorker::TrihAnnsWorker
 
 }
 
-inline void checkCublasStatus(cublasStatus_t status)
-{
-  if (status != CUBLAS_STATUS_SUCCESS)
-  {
-    printf("cuBLAS API failed with status %d\n", status);
-    throw std::logic_error("cuBLAS API failed");
-  }
-  // else {
-  //   printf("success cublas call\n");
-  // }
-}
-
 int* TrihAnnsWorker::batch_query_search
 (
   float *batch_query,
@@ -742,6 +741,7 @@ int* TrihAnnsWorker::batch_query_search
   int *ground_truth_neighbors
 )
 {
+  auto start_time = std::chrono::high_resolution_clock::now();
   /// copy batch_query to gpu and project it and transform to half precision
   cudaMemcpyAsync(batch_query_d, batch_query, batch_query_num * dim * sizeof(float), cudaMemcpyHostToDevice, work_stream);
 
@@ -749,83 +749,105 @@ int* TrihAnnsWorker::batch_query_search
   // pca_dim_pca_data_d(dim, pca_dim),  
   // batch_query_d(dim, batch_query_num), 
   // pca_batch_query_d(pca_dim, batch_query_num)
-  printf("project the query\n");
-  printf("dim: %d, pca_dim: %d, batch_query_num: %d\n", dim, pca_dim, batch_query_num);
-  constexpr float a = 1.0f;
-  constexpr float b = 0.0f;
+
+  // covert batch_query to half precision
+  float_to_half_kernel<<<(batch_query_num * dim + 255) / 256, 256, 0, work_stream>>>
+    (batch_query_d, half_batch_query_d, batch_query_num * dim);
+  // constexpr float a = 1.0f;
+  // constexpr float b = 0.0f;
+  // half a = __float2half(1.0f);
+  // half b = __float2half(0.0f);
+  // cublasGemmEx(
+  //   handle,
+  //   CUBLAS_OP_T, CUBLAS_OP_N,
+  //   pca_dim, batch_query_num, dim,
+  //   &a, //alpha0_d,
+  //   pca_dim_pca_data_d, CUDA_R_32F, dim,
+  //   batch_query_d, CUDA_R_32F, dim,
+  //   &b, //beta0_d,
+  //   pca_batch_query_d, CUDA_R_32F, pca_dim,
+  //   CUDA_R_32F,
+  //   CUBLAS_GEMM_DEFAULT
+  // );
+
   cublasGemmEx(
     handle,
     CUBLAS_OP_T, CUBLAS_OP_N,
     pca_dim, batch_query_num, dim,
-    &a, //alpha0_d,
-    pca_dim_pca_data_d, CUDA_R_32F, dim,
-    batch_query_d, CUDA_R_32F, dim,
-    &b, //beta0_d,
-    pca_batch_query_d, CUDA_R_32F, pca_dim,
-    CUDA_R_32F,
-    CUBLAS_GEMM_DEFAULT
+    alpha0_d,
+    half_pca_dim_pca_data_d, CUDA_R_16F, dim,
+    half_batch_query_d, CUDA_R_16F, dim,
+    beta0_d,
+    half_pca_queries_d, CUDA_R_16F, pca_dim,
+    CUDA_R_16F,
+    CUBLAS_GEMM_DEFAULT_TENSOR_OP
   );
 
-  // print pca_batch_query_d
-  // float *pca_batch_query_h;
-  // cudaMallocHost(&pca_batch_query_h, batch_query_num * pca_dim * sizeof(float));
-  // cudaMemcpy(pca_batch_query_h, pca_batch_query_d, batch_query_num * pca_dim * sizeof(float), cudaMemcpyDeviceToHost);
-  // for (int i = 0; i < batch_query_num; i++)
-  // {
-  //   printf("Query %d\n", i);
-  //   for (int j = 0; j < pca_dim; j++)
-  //   {
-  //     printf("%.4f ", pca_batch_query_h[i * pca_dim + j]);
-  //   }
-  //   printf("\n");
-  // }
-
-  printf("transform to half precision\n");
-  // transform to half precision
-  float_to_half_kernel<<<(batch_query_num * pca_dim + 255) / 256, 256, 0, work_stream>>>
-    (pca_batch_query_d, half_pca_queries_d, batch_query_num * pca_dim);
+  // printf("transform to half precision\n");
+  // float_to_half_kernel<<<(batch_query_num * pca_dim + 255) / 256, 256, 0, work_stream>>>
+  //   (pca_batch_query_d, half_pca_queries_d, batch_query_num * pca_dim);
   ///
 
-  printf("compute l2 distances\n");
+  // printf("compute l2 distances\n");
   /// compute l2 distances between half_pca_dataset_d and half_pca_queries_d
   // half_pca_dataset_d(pca_dim, data_num)
   // half_pca_queries_d(pca_dim, batch_query_num)
   // half_dists_d(data_num, batch_query_num)
-  half a1 = __float2half(-2.0f);
-  half b1 = __float2half(0.0f);
-  half a2 = __float2half(1.0f);
-  cublasGemmEx(
-    handle,
-    CUBLAS_OP_T, CUBLAS_OP_N,
-    data_num, batch_query_num, pca_dim,
-    &a1, //alpha_d,
-    half_pca_dataset_d, CUDA_R_16F, pca_dim,
-    half_pca_queries_d, CUDA_R_16F, pca_dim,
-    &b1, //beta_d,
-    half_dists_d, CUDA_R_16F, data_num,
-    CUDA_R_16F,
-    CUBLAS_GEMM_DEFAULT
-  );
-
-  addVectors(
-    half_dists_d,
-    half_pca_dataset_norms_d,
-    data_num * batch_query_num,
-    work_stream
-  );
-
-  // cublasAxpyEx(
+  // half a1 = __float2half(-2.0f);
+  // half b1 = __float2half(1.0f);
+  // float a1 = -2.0f;
+  // float b1 = 1.0f;
+  // half a2 = __float2half(1.0f);
+  // cublasGemmEx(
   //   handle,
-  //   data_num * batch_query_num,
-  //   &a2, //alpha1_d,
+  //   CUBLAS_OP_T, CUBLAS_OP_N,
+  //   data_num, batch_query_num, pca_dim,
+  //   alpha_d,
+  //   half_pca_dataset_d, CUDA_R_16F, pca_dim,
+  //   half_pca_queries_d, CUDA_R_16F, pca_dim,
+  //   beta_d,
+  //   half_dists_d, CUDA_R_16F, data_num,
   //   CUDA_R_16F,
-  //   half_pca_dataset_norms_d, CUDA_R_16F, 1,
-  //   half_dists_d, CUDA_R_16F, 1,
-  //   CUDA_R_16F
+  //   CUBLAS_GEMM_DEFAULT_TENSOR_OP
   // );
-  ///
 
-  printf("reduce_min\n");
+  // addVectors(
+  //   half_dists_d,
+  //   half_pca_dataset_norms_d,
+  //   data_num * batch_query_num,
+  //   work_stream
+  // );
+
+  // using Gemm = TrihAnnsWorker::Gemm;
+
+  cutlass::gemm::GemmCoord problem_size(data_num, batch_query_num, pca_dim);
+
+  int split_k_slices = 1;
+
+  cutlass::layout::RowMajor tensor_A_layout(pca_dim);
+  cutlass::layout::ColumnMajor tensor_B_layout(pca_dim);
+  cutlass::layout::ColumnMajor tensor_C_layout(data_num);
+  cutlass::layout::ColumnMajor tensor_D_layout(data_num);
+
+  cutlass::TensorRef<cutlass::half_t, cutlass::layout::RowMajor> tensor_A(reinterpret_cast<cutlass::half_t*>(half_pca_dataset_d), tensor_A_layout);
+  cutlass::TensorRef<cutlass::half_t, cutlass::layout::ColumnMajor> tensor_B(reinterpret_cast<cutlass::half_t*>(half_pca_queries_d), tensor_B_layout);
+  cutlass::TensorRef<cutlass::half_t, cutlass::layout::ColumnMajor> tensor_C(reinterpret_cast<cutlass::half_t*>(half_pca_dataset_norms_d), tensor_C_layout);
+  cutlass::TensorRef<cutlass::half_t, cutlass::layout::ColumnMajor> tensor_D(reinterpret_cast<cutlass::half_t*>(half_dists_d), tensor_D_layout);
+
+  typename Gemm::Arguments arguments{
+    problem_size,
+    tensor_A,
+    tensor_B,
+    tensor_C,
+    tensor_D,
+    {alpha, beta},
+    split_k_slices
+  };
+
+  gemm_op.initialize(arguments, gemm_workspace.get(), work_stream);
+
+  gemm_op(work_stream);
+
   /// reduce half_dists_d into reduced_dists_per_query_d and reduced_ids_per_query_d
   half_matrix_reduce(
     half_dists_d, 
@@ -838,7 +860,7 @@ int* TrihAnnsWorker::batch_query_search
   );
   ///
 
-  printf("segmented_sort_topk_pairs_fp16\n");
+  // printf("segmented_sort_topk_pairs_fp16\n");
   /// extract topk from reduced_dists_per_query_d and reduced_ids_per_query_d
   cub::DeviceSegmentedRadixSort::SortPairs(
     nullptr, 
@@ -885,7 +907,7 @@ int* TrihAnnsWorker::batch_query_search
   );
   ///
 
-  printf("re-rank\n");
+  // printf("re-rank\n");
   /// copy phase1_distances_d, phase1_ids_d to phase1_distances_h, phase1_ids_h
   cudaMemcpyAsync(phase1_distances_h, phase1_distances_d, batch_query_num * phase1_topk * sizeof(half), cudaMemcpyDeviceToHost, work_stream);
   cudaMemcpyAsync(phase1_ids_h, phase1_ids_d, batch_query_num * phase1_topk * sizeof(int), cudaMemcpyDeviceToHost, work_stream);
@@ -893,16 +915,53 @@ int* TrihAnnsWorker::batch_query_search
 
   cudaStreamSynchronize(work_stream);
 
-  /// re-rank phase1 topk to get phase2 topk
-  float total_recall_2 = 0.0f;
+  auto end_time = std::chrono::high_resolution_clock::now();
+  auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time).count();
+  printf("batch_query_search gpu execution time: %.3f us\n", static_cast<float>(duration));
+
+  auto rerank_start = std::chrono::high_resolution_clock::now();
+  /// assign rerank tasks
+  std::vector<std::future<int>> results;
+
+  for (int i=0; i<batch_query_num; i++)
+  {
+    // printf("rerank query %d\n", i);
+    results.emplace_back(
+      rerank_thread_pool->enqueue(
+        re_rank, 
+        base_dataset_h, 
+        base_dataset_norms_h,
+        batch_query + i * dim,
+        phase1_ids_h + i * phase1_topk,
+        phase1_topk,
+        data_num,
+        dim,
+        phase2_topk,
+        phase2_ids_h + i * phase2_topk
+      )
+    );
+  }
+  ///
+
+  for (auto && result: results)
+  {
+    result.get();
+  }
+
+  auto rerank_end = std::chrono::high_resolution_clock::now();
+  auto rerank_duration = std::chrono::duration_cast<std::chrono::microseconds>(rerank_end - rerank_start).count();
+  printf("Re-ranking phase execution time: %.3f us\n", static_cast<float>(rerank_duration));
+
+  float total_recall = 0.0f;
   for (size_t i = 0; i < batch_query_num; i++)
   {
     int total_found = 0;
     for (size_t j = 0; j < phase2_topk; j++)
     {
-      for (size_t k = 0; k < phase1_topk; k++)
+      for (size_t k = 0; k < phase2_topk; k++)
       {
-        if (phase1_ids_h[i * phase1_topk + k] == ground_truth_neighbors[i * phase2_topk + j])
+        // printf("k %d, %d\n", k, phase2_neighbors[i * phase1_topk + k]);
+        if (phase2_ids_h[i * phase2_topk + k] == ground_truth_neighbors[i * phase2_topk + j])
         {
           total_found++;
           break;
@@ -911,12 +970,12 @@ int* TrihAnnsWorker::batch_query_search
     }
 
     float recall = static_cast<float>(total_found) / phase2_topk;
-    total_recall_2 += recall;
+    total_recall += recall;
+    
   }
   
-  float avg_recall_2 = total_recall_2 / batch_query_num;
-  printf("Average recall: %.4f\n", avg_recall_2);
-  ///
+  float avg_recall = total_recall / batch_query_num;
+  printf("Average recall: %.4f\n", avg_recall);
 
   return phase1_ids_h;
 

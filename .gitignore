@@ -35,6 +35,8 @@ Thumbs.db
 # Other
 *.log
 log/
+*.nsys-rep
+*.sqlite
 
 # third party
 eigen-3.4.0/

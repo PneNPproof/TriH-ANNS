@@ -7,12 +7,12 @@ gist load_gist(const char *filename)
 {
     gist data;
     data.dim = 960;
-    data.train = new float[1000000*960];
+    data.train = static_cast<float*>(aligned_alloc(64, 1000000 * 960 * sizeof(float)));
     data.train_point_count = 1000000;
-    data.test = new float[1000*960];
+    data.test = static_cast<float*>(aligned_alloc(64, 1000 * 960 * sizeof(float)));
     data.test_point_count = 1000;
-    data.neighbors = new uint32_t[1000*100];
-    data.distances = new float[1000*100];
+    data.neighbors = static_cast<uint32_t*>(aligned_alloc(64, 1000 * 100 * sizeof(uint32_t)));
+    data.distances = static_cast<float*>(aligned_alloc(64, 1000 * 100 * sizeof(float)));
     data.neighbors_per_test = 100;
 
     hid_t h5f = H5Fopen(filename, H5F_ACC_RDONLY, H5P_DEFAULT);
