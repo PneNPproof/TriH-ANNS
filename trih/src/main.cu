@@ -17,6 +17,8 @@
 #include "shuffle.h"
 #include "utils.h"
 
+#include "sq.h"
+
 #include "gpu_pca_anns.cuh"
 
 #define SECTION_NUM 8000
@@ -57,7 +59,11 @@ void gpu_warmup() {
     cudaGetLastError();
 }
 
+//全局变量
+sq_info *p_sq_info;
 
+ThreadPool pool(20);
+vector< future<int> > results;
 
 int main(int argc, char *argv[]) {
             
@@ -115,11 +121,13 @@ int main(int argc, char *argv[]) {
         std::cout << "\trecord_num=" << index.record_num << std::endl;
         std::cout << "\tcolumn_num=" << index.column_num << std::endl;
         std::cout << "\tratio=" << index.ratio << std::endl;
-        std::cout << "\tcolumn_num2=" << index.column_num2 << std::endl;
-        std::cout << "\tratio2=" << index.ratio2 << std::endl;
 
         ifs.close();
 
+        //预计算 SQ，针对remain部分
+        std::cout << "Pre-computing ..." << std::endl;
+        p_sq_info = new sq_info[index.record_num];
+        gen_sq_info(index.trans_data_remain, index.dim-index.column_num, 8, index.record_num, p_sq_info, CUT);
 
 
         int test_batch_size = atoi(argv[3]);
@@ -154,12 +162,14 @@ int main(int argc, char *argv[]) {
         }
 
         worker.batch_query_search(
+            index,
             batch_query,
             test_batch_size,
             (int *)gdata.neighbors
         );
 
         worker.batch_query_search(
+            index,
             gdata.test,
             test_batch_size,
             (int *)gdata.neighbors

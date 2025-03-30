@@ -6,6 +6,7 @@
 #include "reduce_min.cuh"
 #include "rerank.cuh"
 #include "rerank.h"
+#include "sq.h"
 
 #include <cuda_runtime.h>
 #include <cub/util_allocator.cuh>
@@ -16,6 +17,10 @@
 #include <cublas_v2.h>
 
 #include <vector>
+
+extern sq_info *p_sq_info;
+extern ThreadPool pool;
+extern vector< future<int> > results;
 
 // Define a kernel to convert half to float
 __global__ void half_to_float_kernel(half* input, float* output, int size) {
@@ -429,20 +434,22 @@ void gpu_anns
 
   for (int i=0; i<query_num; i++)
   {
-    results.emplace_back(
-      pool.enqueue(
-        re_rank, 
-        src_data, 
-        src_data_norms,
-        query + i * index.dim,
-        phase1_neighbors + i * phase1_topk,
-        phase1_topk,
-        index.record_num,
-        index.dim,
-        phase2_topk,
-        phase2_neighbors + i * phase2_topk
-      )
-    );
+    // results.emplace_back(
+    //   pool.enqueue(
+    //     re_rank, 
+    //     src_data, 
+    //     src_data_norms,
+    //     query + i * index.dim,
+    //     phase1_neighbors + i * phase1_topk,
+    //     phase1_topk,
+    //     index.record_num,
+    //     index.dim,
+    //     phase2_topk,
+    //     phase2_neighbors + i * phase2_topk
+    //   )
+    // );
+
+
   }
 
   for (auto && result: results)
@@ -736,6 +743,7 @@ gemm_workspace(1024 * 1024 * 1024)
 
 int* TrihAnnsWorker::batch_query_search
 (
+  pca_index &index,
   float *batch_query,
   int batch_query_num,
   int *ground_truth_neighbors
@@ -926,20 +934,45 @@ int* TrihAnnsWorker::batch_query_search
   for (int i=0; i<batch_query_num; i++)
   {
     // printf("rerank query %d\n", i);
+    // results.emplace_back(
+    //   rerank_thread_pool->enqueue(
+    //     re_rank, 
+    //     base_dataset_h, 
+    //     base_dataset_norms_h,
+    //     batch_query + i * dim,
+    //     phase1_ids_h + i * phase1_topk,
+    //     phase1_topk,
+    //     data_num,
+    //     dim,
+    //     phase2_topk,
+    //     phase2_ids_h + i * phase2_topk
+    //   )
+    // );
+
+
+
+    float *distances = new float[phase1_topk];
+    int *neighbors = new int[phase1_topk];
+
+    for(int k=0; k<phase1_topk; k++)
+      distances[k] = __half2float(phase1_distances_h[phase1_topk * i + k]);
+    memcpy(neighbors, phase1_ids_h + i * phase1_topk, sizeof(int) * phase1_topk);
+
     results.emplace_back(
       rerank_thread_pool->enqueue(
         re_rank, 
-        base_dataset_h, 
-        base_dataset_norms_h,
-        batch_query + i * dim,
-        phase1_ids_h + i * phase1_topk,
+        batch_query + i * index.dim,
+        std::ref(index),
+        p_sq_info,
+        distances,
+        neighbors,
         phase1_topk,
-        data_num,
-        dim,
         phase2_topk,
         phase2_ids_h + i * phase2_topk
       )
     );
+
+
   }
   ///
 

@@ -1,10 +1,13 @@
 #include <cstdlib>
 #include <cstring>
 #include <immintrin.h>
-#include <cstdio>
+#include <iostream>
 
+#include "distance.h"
 #include "rerank.h"
-
+#include "pca.h"
+#include "sq.h"
+#include "distance.h"
 
 // Scalar version of inner_product function without SIMD instructions
 float inner_product_scalar(
@@ -84,79 +87,6 @@ float inner_product(
     }
 
     return _mm512_reduce_add_ps(sum0);
-}
-
-float avx512_dot_product(const float* a, const float* b, size_t d) {
-    constexpr size_t VECTOR_SIZE = 16; // 每个AVX512向量包含16个float
-    constexpr size_t UNROLL_FACTOR = 4; // 循环展开因子
-    
-    // 预取配置
-    constexpr size_t PREFETCH_DISTANCE = 512; // 预取距离（字节）
-    const float* a_next = a + PREFETCH_DISTANCE/sizeof(float);
-    const float* b_next = b + PREFETCH_DISTANCE/sizeof(float);
-    
-    // 初始化8个累加器减少依赖
-    __m512 acc0 = _mm512_setzero_ps();
-    __m512 acc1 = _mm512_setzero_ps();
-    __m512 acc2 = _mm512_setzero_ps();
-    __m512 acc3 = _mm512_setzero_ps();
-    
-    size_t i = 0;
-    const size_t main_loop_count = d / (VECTOR_SIZE * UNROLL_FACTOR);
-    
-    // 主循环：展开4次，每次处理64个float
-    for (; i < main_loop_count * VECTOR_SIZE * UNROLL_FACTOR; 
-         i += VECTOR_SIZE * UNROLL_FACTOR) 
-    {
-        // 预取数据
-        _mm_prefetch((const char*)(a_next), _MM_HINT_T0);
-        _mm_prefetch((const char*)(b_next), _MM_HINT_T0);
-        a_next += VECTOR_SIZE * UNROLL_FACTOR;
-        b_next += VECTOR_SIZE * UNROLL_FACTOR;
-        
-        // 加载数据块
-        __m512 va0 = _mm512_load_ps(a + i);
-        __m512 vb0 = _mm512_load_ps(b + i);
-        __m512 va1 = _mm512_load_ps(a + i + 16);
-        __m512 vb1 = _mm512_load_ps(b + i + 16);
-        __m512 va2 = _mm512_load_ps(a + i + 32);
-        __m512 vb2 = _mm512_load_ps(b + i + 32);
-        __m512 va3 = _mm512_load_ps(a + i + 48);
-        __m512 vb3 = _mm512_load_ps(b + i + 48);
-        
-        // 融合乘加运算
-        acc0 = _mm512_fmadd_ps(va0, vb0, acc0);
-        acc1 = _mm512_fmadd_ps(va1, vb1, acc1);
-        acc2 = _mm512_fmadd_ps(va2, vb2, acc2);
-        acc3 = _mm512_fmadd_ps(va3, vb3, acc3);
-    }
-    
-    // 合并累加器
-    acc0 = _mm512_add_ps(acc0, acc1);
-    acc2 = _mm512_add_ps(acc2, acc3);
-    __m512 acc = _mm512_add_ps(acc0, acc2);
-    
-    // 处理剩余元素（非完整向量部分）
-    const size_t remaining = d % (VECTOR_SIZE * UNROLL_FACTOR);
-    if (remaining > 0) {
-        // 创建掩码
-        const __mmask16 mask = (1 << (remaining % VECTOR_SIZE)) - 1;
-        
-        // 带掩码的加载和计算
-        __m512 va = _mm512_maskz_load_ps(mask, a + i);
-        __m512 vb = _mm512_maskz_load_ps(mask, b + i);
-        acc = _mm512_fmadd_ps(va, vb, acc);
-    }
-    
-    // 水平求和
-    float result = _mm512_reduce_add_ps(acc);
-    
-    // 处理最后几个标量元素（当d不是16的整数倍时）
-    for (i = d - (d % VECTOR_SIZE); i < d; ++i) {
-        result += a[i] * b[i];
-    }
-    
-    return result;
 }
 
 
@@ -297,7 +227,7 @@ void get_min_k_ids(const T* distance, const int* id, int n, int k, int *result, 
  * @note The function assumes all input arrays are properly allocated
  * @note Results are sorted in ascending order by distance
  */
-int re_rank(
+int re_rank2(
   float* dataset, 
   float* dataset_squared_norms, 
   float *query, 
@@ -313,10 +243,8 @@ int re_rank(
   
   for (int i=0; i<phase1_topk; i++) {
     int id = phase1_topk_ids[i];
-    // printf("id: %d\n", id);
-    // printf("dataset_squared_norms[id]: %f\n", dataset_squared_norms[id]);
-    distances_buffer[i] = dataset_squared_norms[id] - 2 * avx512_dot_product(query, dataset + id * dim, dim);
     // distances_buffer[i] = dataset_squared_norms[id] - 2 * inner_product(query, dataset + id * dim, dim);
+    distances_buffer[i] = euclideanDistance_avx512(query, dataset + id * dim, dim);
     // distances_buffer[i] = dataset_squared_norms[id] - 2 * inner_product_scalar(query, dataset + id * dim, dim);
   }
 
@@ -324,4 +252,56 @@ int re_rank(
   get_min_k_ids(distances_buffer, phase1_topk_ids, phase1_topk, phase2_topk, phase2_topk_ids, (float*)NULL);
 
   return 0;
+}
+
+
+float distance_compensation_sq_precomputing_avx(uint8_t *qq, float min_q, uint32_t sum_qq, float scale_q, int dim, sq_info &sq) {
+    float dist = sq.xx;
+
+    // uint32_t tmp = dot_product(qq, sq.quant_x_uint8, dim);
+    // uint32_t tmp = dot_product_uint8(qq, sq.quant_x_uint8, dim);//王哲
+    uint32_t tmp = dot_product_uint8_avx512(qq, sq.quant_x_uint8, dim);
+    
+    dist -= 2*(sq.scale * scale_q * tmp + scale_q * sq.min * sum_qq + sq.scale * min_q * sq.sum_quant_x + min_q * sq.min * dim);
+    
+    return dist;
+}
+
+int re_rank(
+    float *query,
+    pca_index &index,
+    sq_info *p_sq_info,
+    float *distances,
+    int *ids,
+    int size,
+    int final_topk,
+    int *final_topk_ids
+){
+
+    float *q_proj_remain = static_cast<float*>(aligned_alloc(64, sizeof(float)*(index.dim - index.column_num)));
+    queryProjectRest2(query, index, q_proj_remain);
+
+    //针对query remain 进行量化
+    float min_q, max_q, scale_q;
+    uint8_t *qq = static_cast<uint8_t*>(aligned_alloc(64, index.dim-index.column_num));
+    // scalar_quantize(q_proj_remain, qq, index.dim-index.column_num, 8, &min_q, &max_q, &scale_q);
+    uint32_t sum_qq = 0;
+    // for(int i=0; i<index.dim-index.column_num; i++) sum_qq += qq[i];
+
+    //距离补偿
+    // #pragma omp parallel for
+    for(int i=0; i<size; i++) {
+        distances[i] += distance_compensation_sq_precomputing_avx(qq, min_q, sum_qq, scale_q, index.dim-index.column_num, p_sq_info[ids[i]]);
+    }
+
+    // free(qq); 
+
+    //重新排序，获取最终结果
+    get_min_k_ids(distances, ids, size, final_topk, final_topk_ids, (float*)NULL);
+
+    // free(q_proj_remain);
+    // delete [] distances;
+    // delete [] ids;
+
+    return 0;
 }

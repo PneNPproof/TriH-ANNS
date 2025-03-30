@@ -61,8 +61,6 @@ public:
   float* pca_batch_query_d;
   half* alpha0_d;
   half* beta0_d;
-  // half* half_batch_query_d;
-
 /// for query project
 
 /// fro l2mm
@@ -129,6 +127,7 @@ public:
 
   int* batch_query_search
   (
+    pca_index &index,
     float *batch_query,
     int batch_query_num,
     int *ground_truth_neighbors

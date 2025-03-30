@@ -34,7 +34,8 @@ add_compile_options(
 add_compile_options(
     "$<$<COMPILE_LANGUAGE:CXX>:-O3>"
     "$<$<COMPILE_LANGUAGE:CUDA>:-O3>"
-    "$<$<COMPILE_LANGUAGE:CUDA>:-Xptxas=-O3,-v>"
+    # "$<$<COMPILE_LANGUAGE:CUDA>:-Xptxas=-O3,-v>"
+    "$<$<COMPILE_LANGUAGE:CUDA>:-Xptxas=-O3>"
 )
 # set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -flto")
 
@@ -43,7 +44,8 @@ link_directories("/usr/lib/x86_64-linux-gnu/hdf5/serial")
 set(TARGET_NAME trih_anns)
 
 add_executable(${TARGET_NAME} 
-                src/main.cu 
+                src/main.cu
+                src/rerank.cpp 
                 src/pca.cpp 
                 src/search.cpp 
                 src/gist.cpp 
@@ -53,7 +55,7 @@ add_executable(${TARGET_NAME}
                 gpu/l2mm.cu 
                 gpu/reduce_min.cu
                 gpu/rerank.cu
-                src/rerank.cpp
+                src/sq.cpp
                 )
 
 target_include_directories(${TARGET_NAME} PRIVATE
