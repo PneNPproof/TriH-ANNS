@@ -1,6 +1,5 @@
 #include <iostream>
 #include <fstream>
-
 #include <vector>
 #include <cstring>
 #include <thread>
@@ -10,6 +9,8 @@
 #include <cmath>
 #include <omp.h>
 #include <float.h>
+
+#include <cuda_runtime.h>
 
 #include "gist.h"
 #include "pca.h"
@@ -168,7 +169,18 @@ int main(int argc, char *argv[]) {
             (int *)gdata.neighbors
         );
 
-        worker.batch_query_search(
+        cudaStream_t stream1;
+        cudaStreamCreate(&stream1);
+        auto cp_worker = new TrihAnnsWorker(worker, stream1);
+
+        // worker.batch_query_search(
+        //     index,
+        //     gdata.test,
+        //     test_batch_size,
+        //     (int *)gdata.neighbors
+        // );
+
+        cp_worker->batch_query_search(
             index,
             gdata.test,
             test_batch_size,

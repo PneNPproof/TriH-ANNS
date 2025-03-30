@@ -125,6 +125,12 @@ public:
     int re_rank_thread_pool_size_ = 12
   );
 
+  TrihAnnsWorker
+  (
+    TrihAnnsWorker &other,
+    cudaStream_t work_stream_
+  );
+
   int* batch_query_search
   (
     pca_index &index,

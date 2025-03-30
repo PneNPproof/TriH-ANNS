@@ -708,24 +708,6 @@ gemm_workspace(1024 * 1024 * 1024)
   cudaMemset(reduced_dists_per_query_d, 0, reduce_group_num * max_queries_num * sizeof(half));
   cudaMemset(reduced_ids_per_query_d, 0, reduce_group_num * max_queries_num * sizeof(int));
 
-
-  // temp_storage_bytes = 0;
-  // cub::DeviceSegmentedRadixSort::SortPairs(
-  //   nullptr, 
-  //   temp_storage_bytes, 
-  //   reduced_dists_per_query_d, 
-  //   reduced_dists_per_query_d, 
-  //   reduced_ids_per_query_d, 
-  //   reduced_ids_per_query_d, 
-  //   reduce_group_num * max_queries_num, 
-  //   max_queries_num, 
-  //   segments_offsets_d, 
-  //   segments_offsets_d + 1, 
-  //   0, 
-  //   sizeof(float) * 8, 
-  //   work_stream
-  // );
-
   temp_storage_bytes = 1024 * 1024 * 1024;
 
   printf("temp_storage_bytes in construction: %d\n", temp_storage_bytes);
@@ -739,6 +721,77 @@ gemm_workspace(1024 * 1024 * 1024)
   cudaMallocHost(&phase2_ids_h, max_queries_num * phase2_topk * sizeof(int));
   ///
 
+}
+
+TrihAnnsWorker::TrihAnnsWorker
+(
+  TrihAnnsWorker &other,
+  cudaStream_t work_stream_
+):
+  alpha(other.alpha),
+  beta(other.beta),
+  gemm_workspace(1024 * 1024 * 1024),
+  full_dim_pca_data_d(other.full_dim_pca_data_d),
+  full_dim_pca_data_h(other.full_dim_pca_data_h),
+  pca_dim_pca_data_d(other.pca_dim_pca_data_d),
+  half_pca_dim_pca_data_d(other.half_pca_dim_pca_data_d),
+  alpha0_d(other.alpha0_d),
+  beta0_d(other.beta0_d),
+  half_pca_dataset_d(other.half_pca_dataset_d),
+  half_pca_dataset_norms_d(other.half_pca_dataset_norms_d),
+  alpha_d(other.alpha_d),
+  beta_d(other.beta_d),
+  alpha1_d(other.alpha1_d),
+  segments_offsets_d(other.segments_offsets_d),
+  temp_storage_bytes(other.temp_storage_bytes),
+  base_dataset_h(other.base_dataset_h),
+  pca_dataset_h(other.pca_dataset_h),
+  base_dataset_norms_h(other.base_dataset_norms_h),
+  rerank_thread_pool(other.rerank_thread_pool),
+  data_num(other.data_num),
+  max_queries_num(other.max_queries_num),
+  dim(other.dim),
+  pca_dim(other.pca_dim),
+  reduce_group_size(other.reduce_group_size),
+  reduce_group_num(other.reduce_group_num),
+  phase1_topk(other.phase1_topk),
+  phase2_topk(other.phase2_topk),
+  work_stream(work_stream_)
+{
+  /// allocate memory for batch_query_d, pca_batch_query_d, half_batch_query_d
+  cudaMalloc(&batch_query_d, max_queries_num * dim * sizeof(float));
+  cudaMalloc(&pca_batch_query_d, max_queries_num * pca_dim * sizeof(float));
+  cudaMalloc(&half_batch_query_d, max_queries_num * dim * sizeof(half));
+  ///
+
+  /// allocate half_dists_d and half_pca_queries_d
+  cudaMalloc(&half_dists_d, data_num * max_queries_num * sizeof(half));
+  cudaMalloc(&half_pca_queries_d, max_queries_num * pca_dim * sizeof(half));
+  ///
+
+  /// create cublas handle
+  cublasCreate(&handle);
+  cublasSetStream(handle, work_stream);
+  cublasSetPointerMode(handle, CUBLAS_POINTER_MODE_DEVICE);
+  ///
+
+  /// allocate memory for reduced_dists_per_query_d, reduced_ids_per_query_d
+  cudaMalloc(&reduced_dists_per_query_d, reduce_group_num * max_queries_num * sizeof(half));
+  cudaMalloc(&reduced_ids_per_query_d, reduce_group_num * max_queries_num * sizeof(int));
+  ///
+
+  /// allocate memory for phase1_distances_d, phase1_ids_d
+  cudaMalloc(&phase1_distances_d, max_queries_num * phase1_topk * sizeof(half));
+  cudaMalloc(&phase1_ids_d, max_queries_num * phase1_topk * sizeof(int));
+  ///
+
+  cudaMalloc(&temp_storage_d, temp_storage_bytes);
+
+  /// allocate memory for phase1_distances_h, phase1_ids_h and phase2_ids_h
+  cudaMallocHost(&phase1_distances_h, max_queries_num * phase1_topk * sizeof(half));
+  cudaMallocHost(&phase1_ids_h, max_queries_num * phase1_topk * sizeof(int));
+  cudaMallocHost(&phase2_ids_h, max_queries_num * phase2_topk * sizeof(int));
+  ///
 }
 
 int* TrihAnnsWorker::batch_query_search
@@ -761,23 +814,7 @@ int* TrihAnnsWorker::batch_query_search
   // covert batch_query to half precision
   float_to_half_kernel<<<(batch_query_num * dim + 255) / 256, 256, 0, work_stream>>>
     (batch_query_d, half_batch_query_d, batch_query_num * dim);
-  // constexpr float a = 1.0f;
-  // constexpr float b = 0.0f;
-  // half a = __float2half(1.0f);
-  // half b = __float2half(0.0f);
-  // cublasGemmEx(
-  //   handle,
-  //   CUBLAS_OP_T, CUBLAS_OP_N,
-  //   pca_dim, batch_query_num, dim,
-  //   &a, //alpha0_d,
-  //   pca_dim_pca_data_d, CUDA_R_32F, dim,
-  //   batch_query_d, CUDA_R_32F, dim,
-  //   &b, //beta0_d,
-  //   pca_batch_query_d, CUDA_R_32F, pca_dim,
-  //   CUDA_R_32F,
-  //   CUBLAS_GEMM_DEFAULT
-  // );
-
+ 
   cublasGemmEx(
     handle,
     CUBLAS_OP_T, CUBLAS_OP_N,
@@ -790,43 +827,6 @@ int* TrihAnnsWorker::batch_query_search
     CUDA_R_16F,
     CUBLAS_GEMM_DEFAULT_TENSOR_OP
   );
-
-  // printf("transform to half precision\n");
-  // float_to_half_kernel<<<(batch_query_num * pca_dim + 255) / 256, 256, 0, work_stream>>>
-  //   (pca_batch_query_d, half_pca_queries_d, batch_query_num * pca_dim);
-  ///
-
-  // printf("compute l2 distances\n");
-  /// compute l2 distances between half_pca_dataset_d and half_pca_queries_d
-  // half_pca_dataset_d(pca_dim, data_num)
-  // half_pca_queries_d(pca_dim, batch_query_num)
-  // half_dists_d(data_num, batch_query_num)
-  // half a1 = __float2half(-2.0f);
-  // half b1 = __float2half(1.0f);
-  // float a1 = -2.0f;
-  // float b1 = 1.0f;
-  // half a2 = __float2half(1.0f);
-  // cublasGemmEx(
-  //   handle,
-  //   CUBLAS_OP_T, CUBLAS_OP_N,
-  //   data_num, batch_query_num, pca_dim,
-  //   alpha_d,
-  //   half_pca_dataset_d, CUDA_R_16F, pca_dim,
-  //   half_pca_queries_d, CUDA_R_16F, pca_dim,
-  //   beta_d,
-  //   half_dists_d, CUDA_R_16F, data_num,
-  //   CUDA_R_16F,
-  //   CUBLAS_GEMM_DEFAULT_TENSOR_OP
-  // );
-
-  // addVectors(
-  //   half_dists_d,
-  //   half_pca_dataset_norms_d,
-  //   data_num * batch_query_num,
-  //   work_stream
-  // );
-
-  // using Gemm = TrihAnnsWorker::Gemm;
 
   cutlass::gemm::GemmCoord problem_size(data_num, batch_query_num, pca_dim);
 
@@ -934,43 +934,43 @@ int* TrihAnnsWorker::batch_query_search
   for (int i=0; i<batch_query_num; i++)
   {
     // printf("rerank query %d\n", i);
-    // results.emplace_back(
-    //   rerank_thread_pool->enqueue(
-    //     re_rank, 
-    //     base_dataset_h, 
-    //     base_dataset_norms_h,
-    //     batch_query + i * dim,
-    //     phase1_ids_h + i * phase1_topk,
-    //     phase1_topk,
-    //     data_num,
-    //     dim,
-    //     phase2_topk,
-    //     phase2_ids_h + i * phase2_topk
-    //   )
-    // );
-
-
-
-    float *distances = new float[phase1_topk];
-    int *neighbors = new int[phase1_topk];
-
-    for(int k=0; k<phase1_topk; k++)
-      distances[k] = __half2float(phase1_distances_h[phase1_topk * i + k]);
-    memcpy(neighbors, phase1_ids_h + i * phase1_topk, sizeof(int) * phase1_topk);
-
     results.emplace_back(
       rerank_thread_pool->enqueue(
-        re_rank, 
-        batch_query + i * index.dim,
-        std::ref(index),
-        p_sq_info,
-        distances,
-        neighbors,
+        re_rank2, 
+        base_dataset_h, 
+        base_dataset_norms_h,
+        batch_query + i * dim,
+        phase1_ids_h + i * phase1_topk,
         phase1_topk,
+        data_num,
+        dim,
         phase2_topk,
         phase2_ids_h + i * phase2_topk
       )
     );
+
+
+
+    // float *distances = new float[phase1_topk];
+    // int *neighbors = new int[phase1_topk];
+
+    // for(int k=0; k<phase1_topk; k++)
+    //   distances[k] = __half2float(phase1_distances_h[phase1_topk * i + k]);
+    // memcpy(neighbors, phase1_ids_h + i * phase1_topk, sizeof(int) * phase1_topk);
+
+    // results.emplace_back(
+    //   rerank_thread_pool->enqueue(
+    //     re_rank, 
+    //     batch_query + i * index.dim,
+    //     std::ref(index),
+    //     p_sq_info,
+    //     distances,
+    //     neighbors,
+    //     phase1_topk,
+    //     phase2_topk,
+    //     phase2_ids_h + i * phase2_topk
+    //   )
+    // );
 
 
   }
