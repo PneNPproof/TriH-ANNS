@@ -1,5 +1,7 @@
 #pragma once
 
+#include <mutex>
+
 #include <cuda_fp16.h>
 #include <cublas_v2.h>
 
@@ -93,12 +95,13 @@ public:
   float* base_dataset_h;
   float* pca_dataset_h;
   float* base_dataset_norms_h;
-  int *phase2_ids_h;
+  // int *phase2_ids_h;
   ThreadPool *rerank_thread_pool;
+  static std::mutex thread_pool_mutex;
 /// for re-rank
 
   int data_num;
-  int max_queries_num;
+  size_t max_queries_num;
   int dim;
   int pca_dim;
   int reduce_group_size;
@@ -131,11 +134,20 @@ public:
     cudaStream_t work_stream_
   );
 
-  int* batch_query_search
+  void batch_query_search
   (
-    pca_index &index,
     float *batch_query,
     int batch_query_num,
-    int *ground_truth_neighbors
+    int *phase2_ids_h
   );
 };
+
+/// a search task which executes batch_query_search by one TrihAnnsWorker
+void search_task(
+  TrihAnnsWorker *worker,
+  float *batch_query,
+  int batch_query_num,
+  int *phase2_ids_h,
+  int query_batch_num
+);
+///

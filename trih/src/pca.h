@@ -58,7 +58,7 @@ inline bool compareEigenPairs(const EigenPair &a, const EigenPair &b){
 
 void PCA(const float* src, const int N0, const int D, float &ratio, int &d, float*& pca_data);
 
-void save_pca_index(float *data, int record_num, int dim, //原始数据
+void save_pca_index(float *data, int dim, int record_num, //原始数据
             float &ratio, int &column_num, //PCA 参数
             ofstream &ofs);
 

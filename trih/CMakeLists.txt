@@ -48,7 +48,6 @@ add_executable(${TARGET_NAME}
                 src/rerank.cpp 
                 src/pca.cpp 
                 src/search.cpp 
-                src/gist.cpp 
                 src/shuffle.cpp 
                 src/utils.cpp 
                 src/gpu_pca_anns.cu 
@@ -56,6 +55,7 @@ add_executable(${TARGET_NAME}
                 gpu/reduce_min.cu
                 gpu/rerank.cu
                 src/sq.cpp
+                src/data.cpp
                 )
 
 target_include_directories(${TARGET_NAME} PRIVATE

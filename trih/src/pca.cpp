@@ -112,15 +112,15 @@ void PCA(const float* src, const int N0, const int D, float &ratio, int &d, floa
 }
 
 //为一组数据求PCA，并且保存特征向量，以及投影向量
-void save_pca_index(float *data, int record_num, int dim, //原始数据
+void save_pca_index(float *data, int dim, int record_num, //原始数据
             float &ratio, int &column_num, //PCA 参数
             ofstream &ofs) {
 
-    cout << "Start PCA 1..." << endl;
+    cout << "Start PCA ..." << endl;
     float *pca_data;
     PCA(data, record_num, dim, ratio, column_num, pca_data); //得到  dim * dim 矩阵, columns可以是函数输出
 
-    cout << "PCA 1 ratio=" << ratio << "  column_num=" << column_num << endl;
+    cout << "PCA ratio=" << ratio << "  column_num=" << column_num << endl;
 
 
     //保存 基础信息
@@ -130,7 +130,7 @@ void save_pca_index(float *data, int record_num, int dim, //原始数据
     ofs.write((const char *)&ratio, sizeof(float)); //比率
     ofs.write((const char *)pca_data, sizeof(float)*dim*dim); //保存所有特征向量，dim个特征向量
 
-    cout << "Start PCA 1 projecting..." << endl;
+    cout << "Start PCA projecting..." << endl;
     //使用特征向量，得到原始数据的PCA降维投影
     float *trans_data = new float[record_num*column_num]{0};
 #pragma omp parallel for
@@ -138,14 +138,19 @@ void save_pca_index(float *data, int record_num, int dim, //原始数据
         for(int c=0; c<column_num; c++) {//投影的向量的每一个元素, trans_data shape record_num x column_num, 1000000 x column_num
             for(int d=0; d<dim; d++)
                 trans_data[r*column_num+c] += data[r*dim+d] * pca_data[d*dim+c];
+
+            //yshen
+            // trans_data[r*column_num+c] = data[r*dim+c]; //不进行投影，用于全维度的时候，验证不投影情况下的recall，注意：column_num == dim
         }
     }
 
     ofs.write((const char *)trans_data, sizeof(float)*record_num*column_num);
     delete [] trans_data;
     
+    if(dim <= column_num)
+        return;
 
-    cout << "Start PCA 1 remain projecting..." << endl;
+    cout << "Start PCA remain projecting..." << endl;
     //使用特征向量，得到原始数据的除了PCA上述投影之外的投影
     float *trans_data_remain = new float[record_num*(dim-column_num)]{0};
 #pragma omp parallel for
@@ -180,6 +185,9 @@ void load_pca_index(ifstream &ifs, pca_index &index) {
     index.trans_data = static_cast<float*>(aligned_alloc(64, sizeof(float)*index.record_num*index.column_num));
     ifs.read((char *)index.trans_data, sizeof(float)*index.record_num*index.column_num);
 
+    if(index.dim <= index.column_num)
+        return;
+        
     // index.trans_data_remain = new float[index.record_num*(index.dim-index.column_num)];
     index.trans_data_remain = static_cast<float*>(aligned_alloc(64, sizeof(float)*(index.record_num*(index.dim-index.column_num))));
     ifs.read((char *)index.trans_data_remain, sizeof(float)*index.record_num*(index.dim-index.column_num));
@@ -211,6 +219,9 @@ void queryProjectMain(const float *query, pca_index &index, float *trans_data) {
     for(int c=0; c<index.column_num; c++) {
         for(int d=0; d<index.dim; d++) 
             trans_data[c] += query[d] * index.pca_data[d*index.dim+c];
+
+        //yshen
+        // trans_data[c] = query[c]; //不进行投影，用于全维度的时候，验证不投影情况下的recall，注意：column_num == dim
     }
 }
 

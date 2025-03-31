@@ -9,14 +9,14 @@
 #include <cmath>
 #include <omp.h>
 #include <float.h>
+#include <atomic>
 
 #include <cuda_runtime.h>
 
-#include "gist.h"
 #include "pca.h"
-#include "search.h"
 #include "shuffle.h"
 #include "utils.h"
+#include "dataset.h"
 
 #include "sq.h"
 
@@ -28,96 +28,97 @@
 using namespace std;
 
 // write a GPU warm up kernel
-__global__ void warmup(int *a, int *b, int *c, int n) {
+__global__ void warmup(int *a, int *b, int *c, int n)
+{
     int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i < n) {
+    if (i < n)
+    {
         c[i] = a[i] + b[i];
     }
 }
 
 // write a host func to call the warm up kernel
-void gpu_warmup() {
+void gpu_warmup()
+{
     int n = 1024;
     int *a, *b, *c;
     cudaMalloc(&a, n * sizeof(int));
     cudaMalloc(&b, n * sizeof(int));
     cudaMalloc(&c, n * sizeof(int));
-    
+
     // Call the kernel with appropriate grid and block dimensions
     int blockSize = 256;
     int numBlocks = (n + blockSize - 1) / blockSize;
     warmup<<<numBlocks, blockSize>>>(a, b, c, n);
-    
+
     // Synchronize to ensure the kernel completes
     cudaDeviceSynchronize();
-    
+
     // Free allocated memory
     cudaFree(a);
     cudaFree(b);
     cudaFree(c);
-    
+
     // Reset any errors
     cudaGetLastError();
 }
 
-//全局变量
+// 全局变量
 sq_info *p_sq_info;
 
-ThreadPool pool(20);
-vector< future<int> > results;
+// ThreadPool pool(20);
+vector<future<int>> results;
 
-int main(int argc, char *argv[]) {
-            
-    gist gdata;
+atomic<int> query_batch_counter(0);
 
-    std::cout << "Loading gist data ..." << std::endl;
-    gdata = load_gist("/home/wangzhe/faiss_cpu/GIST960_L2/gist-960-euclidean.hdf5");
+int main(int argc, char *argv[])
+{
 
-    char *index_tag = argv[2];
+    const char *data_dir = "/home/yshen/ann-benchmarks/data";
+    const char *index_dir = "/home/wangzhe/TriH-ANNS/index"; //"/home/yshen/PCA/pca_index_pca_sq/build";
+
     char filename[100];
-    sprintf(filename, "proj_%s.bin", index_tag);
-    
-    if(strcmp(argv[1], "b") == 0) { //build index,           command: ./pca b index_tag column_num(64) ratio(0.85) column_num2(896) ratio2(0.85)
-        if(argc != 7) {
-            cout << "Wrong parameters!" << endl;
-            return 0;
-        }
 
-        int column_num = atoi(argv[3]); //当 列 数量不为 0 ，以输出 列为主，不考虑 ratio 
-        float ratio = atof(argv[4]); //当 列 数量为 0， 以ratio为主，比如 0.85
-        int column_num2 = atoi(argv[5]);
-        float ratio2 = atof(argv[6]); //当 列 数量为 0， 以ratio2为主，比如 0.85
-        
+    std::cout << "Loading data ..." << std::endl;
+    trih::data gdata;
+    sprintf(filename, "%s/%s", data_dir, argv[1]);
+    gdata = trih::load_data(filename);
+
+    char *index_tag = argv[3];
+    sprintf(filename, "%s/proj_%s.bin", index_dir, index_tag);
+
+    if (argv[2][0] == 'b')
+    {                                   // build index,           command: ./pca data_filename b index_tag column_num(128) ratio(0.85)
+        int column_num = atoi(argv[4]); // 当 列 数量不为 0 ，以输出 列为主，不考虑 ratio
+        float ratio = atof(argv[5]);    // 当 列 数量为 0， 以ratio为主，比如 0.85
+
+        std::cout << "Generating index ..." << std::endl;
+
         ofstream ofs(filename, std::ios::binary);
 
-        //对数据进行shuffle
-        myshuffle2(gdata.train, 960, 1000000, (int*)gdata.neighbors, 1000*100);
+        // 对数据进行shuffle
+        myshuffle2(gdata.train, gdata.dim, gdata.train_point_count, (int *)gdata.neighbors, gdata.test_point_count * gdata.neighbors_per_test);
 
-        sprintf(filename, "shuffled_gist_%s.bin", index_tag);
-        save_shuffled_gist(filename, gdata);
+        sprintf(filename, "%s/shuffled_%s.bin", index_dir, index_tag);
+        save_shuffled_data(filename, gdata);
 
-        build_index(gdata.train, 960, 1000000, column_num, ratio, column_num2, ratio2, ofs);
-
+        trih::build_index(gdata.train, gdata.dim, gdata.train_point_count, column_num, ratio, ofs);
         ofs.close();
     }
-    else if(strcmp(argv[1], "s") == 0) { // search,          command: ./pca s index_tag section_num(8000) top_k(300) 
-
-        if(argc != 5) {
-            cout << "Wrong parameters!" << endl;
-            return 0;
-        }
+    else if (argv[2][0] == 's')
+    { // search,          command: ./pca data_filename s index_tag section_num(8000) top_k(300)
 
         std::cout << "Loading index ..." << std::endl;
+
         ifstream ifs(filename, std::ios::binary);
 
-        //load shuffled gist, 在load gist数据的基础上，替换
-        sprintf(filename, "shuffled_gist_%s.bin", index_tag);
-        load_shuffled_gist(filename, gdata);
+        // load shuffled data, 在load 数据的基础上，替换
+        sprintf(filename, "%s/shuffled_%s.bin", index_dir, index_tag);
+        load_shuffled_data(filename, gdata);
 
         pca_index index;
-
         load_pca_index(ifs, index);
-        std::cout << "index " << ": " << std::endl;
+        std::cout << "\tindex " << ": " << std::endl;
         std::cout << "\tdim=" << index.dim << std::endl;
         std::cout << "\trecord_num=" << index.record_num << std::endl;
         std::cout << "\tcolumn_num=" << index.column_num << std::endl;
@@ -125,69 +126,160 @@ int main(int argc, char *argv[]) {
 
         ifs.close();
 
-        //预计算 SQ，针对remain部分
-        std::cout << "Pre-computing ..." << std::endl;
-        p_sq_info = new sq_info[index.record_num];
-        gen_sq_info(index.trans_data_remain, index.dim-index.column_num, 8, index.record_num, p_sq_info, CUT);
+        int query_batch_size = atoi(argv[4]);
+        int phase1_topk = atoi(argv[5]); // 每个section 获取 top1之后，top_k 指定筛选多少
+        int phase2_topk = 100;
+        int rerank_thread_pool_size = 20;
+        int reduce_group_size = 125;
+        int reduce_group_num = 8000;
 
-
-        int test_batch_size = atoi(argv[3]);
-        int top_k = atoi(argv[4]);//每个section 获取 top1之后，top_k 指定筛选多少
-
-        // recall_test(gdata, index, section_num, top_k);
-        // recall_test_sq(gdata, index, section_num, top_k);
-        
-        gpu_warmup();
-        // gpu_anns(gdata.test, test_batch_size, gdata.train, index, gdata.distances, (int *)gdata.neighbors, 125, top_k, 100, (int *)gdata.neighbors);
+        /// create multi worker
+        int num_workers = atoi(argv[6]);
+        int max_queries_num = 1000;
+        vector<cudaStream_t> streams(num_workers);
+        vector<TrihAnnsWorker *> workers(num_workers);
+        for (int i = 0; i < num_workers; i++)
+        {
+            cudaStreamCreate(&streams[i]);
+        }
 
         TrihAnnsWorker worker(
             index.pca_data,
-            gdata.train, 
+            gdata.train,
             index.trans_data,
             index.record_num,
-            1000,
+            max_queries_num,
             index.dim,
             index.column_num,
-            125,
-            8000,
-            top_k,
-            100,
-            0,
-            20
-        );
+            reduce_group_size,
+            reduce_group_num,
+            phase1_topk,
+            phase2_topk,
+            streams[0],
+            rerank_thread_pool_size);
+        workers[0] = &worker;
+        
+        printf("create first worker done\n");
 
-        // randomly generate batch_query, 
-        float *batch_query = (float *)aligned_alloc(64, test_batch_size * index.dim * sizeof(float));
-        for(int i = 0; i < test_batch_size * index.dim; i++) {
-            batch_query[i] = rand() / (float)RAND_MAX;
+        for (int i = 1; i < num_workers; i++)
+        {
+            workers[i] = new TrihAnnsWorker(worker, streams[i]);
         }
 
-        worker.batch_query_search(
-            index,
+        printf("create workers done\n");
+        ///
+
+        /// prepare query batch
+        int batch_num_per_worker = atoi(argv[7]);
+        int query_batch_num = num_workers * batch_num_per_worker;
+
+        // float *batch_query = (float *)aligned_alloc(64, query_batch_num * query_batch_size * gdata.dim * sizeof(float));
+        float *batch_query;
+        aligned_malloc_host((void **)&batch_query, query_batch_num * query_batch_size * gdata.dim * sizeof(float), 64);
+        int *batch_query_groundtruth = (int *)aligned_alloc(64, query_batch_num * query_batch_size * gdata.neighbors_per_test * sizeof(int));
+
+        prepare_query_batch(
+            gdata,
+            query_batch_size,
+            num_workers,
+            batch_num_per_worker,
             batch_query,
-            test_batch_size,
-            (int *)gdata.neighbors
-        );
+            batch_query_groundtruth);
 
-        cudaStream_t stream1;
-        cudaStreamCreate(&stream1);
-        auto cp_worker = new TrihAnnsWorker(worker, stream1);
+        printf("prepare query batch done\n");
+        ///
 
-        // worker.batch_query_search(
-        //     index,
-        //     gdata.test,
-        //     test_batch_size,
-        //     (int *)gdata.neighbors
+        /// randomly generate batch_query for warm up and do warm up
+        float *warmup_batch_query = (float *)aligned_alloc(64, query_batch_size * index.dim * sizeof(float));
+        for (int i = 0; i < query_batch_size * index.dim; i++)
+        {
+            warmup_batch_query[i] = rand() / (float)RAND_MAX;
+        }
+
+        int *topk_ids_1 = (int *)malloc(phase2_topk * query_batch_size * sizeof(int));
+
+        workers[0]->batch_query_search(
+            warmup_batch_query,
+            query_batch_size,
+            topk_ids_1);
+        for (auto &&result : results)
+        {
+            result.get();
+        }
+        results.clear();
+        printf("warm up done\n");
+        ///
+
+        /// using multi_worker to process multiple query batches
+        int *topk_ids = (int *)malloc(phase2_topk * query_batch_size * query_batch_num * sizeof(int));
+
+        auto multi_worker_thread_pool = new ThreadPool(num_workers);
+        std::vector<std::future<void>> multi_worker_results;
+
+        auto multi_worker_search_begin = std::chrono::high_resolution_clock::now();
+
+        for (int i = 0; i < num_workers; i++)
+        {
+            multi_worker_results.emplace_back(multi_worker_thread_pool->enqueue(
+                search_task,
+                workers[i],
+                batch_query,
+                query_batch_size,
+                topk_ids,
+                query_batch_num));
+        }
+
+        for (auto &&result : multi_worker_results)
+        {
+            result.get();
+        }
+
+        printf("multi worker done, wait for re-rank\n");
+
+        for (auto &&result : results)
+        {
+            result.get();
+        }
+
+        printf("re-rank done\n");
+
+        auto multi_worker_search_end = std::chrono::high_resolution_clock::now();
+        auto multi_worker_search_duration = std::chrono::duration_cast<std::chrono::milliseconds>(multi_worker_search_end - multi_worker_search_begin);
+
+        size_t qps = (size_t)(query_batch_num * query_batch_size) * 1000 / multi_worker_search_duration.count();
+        printf("multi worker search done, qps = %zu\n", qps);
+
+        trih::cal_recall(batch_query_groundtruth, topk_ids, phase2_topk, gdata.neighbors_per_test, query_batch_num * query_batch_size);
+        ///
+
+        // int *topk_ids_2 = (int *)malloc(100 * query_batch_size * sizeof(int));
+
+        // cudaStream_t stream1;
+        // cudaStreamCreate(&stream1);
+        // auto cp_worker = new TrihAnnsWorker(worker, stream1);
+
+        // cp_worker->batch_query_search(
+        //     batch_query,
+        //     query_batch_size,
+        //     topk_ids_1
         // );
 
-        cp_worker->batch_query_search(
-            index,
-            gdata.test,
-            test_batch_size,
-            (int *)gdata.neighbors
-        );
+        // cp_worker->batch_query_search(
+        //     gdata.test,
+        //     query_batch_size,
+        //     topk_ids_2
+        // );
+
+        // calculate recall
+        // int *ground_truth_neighbors = (int *)gdata.neighbors;
+        // int *topk_ids = topk_ids_2;
+
+        // cal_recall(
+        //     ground_truth_neighbors,
+        //     topk_ids,
+        //     100,
+        //     query_batch_size);
     }
 
     return 0;
 }
-

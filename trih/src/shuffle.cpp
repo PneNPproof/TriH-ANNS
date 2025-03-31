@@ -1,6 +1,6 @@
 #include <random>
 #include <cstring>
-#include <ctime>
+#include <iostream>
 
 void myshuffle(float *vectors, int dim, int size, int *ids) {
     
