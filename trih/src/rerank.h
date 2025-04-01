@@ -9,7 +9,7 @@ struct HeapElement{
     T distance; // 缓存的距离值
 } ;
 
-int re_rank2(
+void re_rank2(
   float* dataset, 
   float* dataset_squared_norms, 
   float *query, 

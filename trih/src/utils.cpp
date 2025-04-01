@@ -87,6 +87,23 @@ void build_index(float *base, int dimension, int size, int &column_num, float &r
 void cal_recall(const int *gt, const int *topk_ids, int topk, int gt_neighbors_per_query, int batch_query_num)
 {
 
+    // Write topk_ids to file
+    // std::ofstream topk_file("log/topk_results_2.txt");
+    // if (!topk_file.is_open()) {
+    //     std::cerr << "Error: Could not open file for writing topk_ids." << std::endl;
+    //     return;
+    // }
+    
+    // for (int i = 0; i < batch_query_num; ++i) {
+    //     for (int j = 0; j < topk; ++j) {
+    //         topk_file << topk_ids[i * topk + j] << " ";
+    //     }
+    //     topk_file << std::endl;
+    // }
+    
+    // topk_file.close();
+    // std::cout << "Top-k IDs written to topk_results.txt" << std::endl;
+
     // // print gt and topk_ids
     // std::cout << "Ground Truth IDs (gt):" << std::endl;
     // for (int i = 0; i < batch_query_num; ++i)
@@ -108,6 +125,8 @@ void cal_recall(const int *gt, const int *topk_ids, int topk, int gt_neighbors_p
     //     }
     //     std::cout << std::endl;
     // }
+
+    std::ofstream query_recall_file("log/query_recalls.txt");
 
     // --- Input Validation ---
     if (gt == nullptr)
@@ -157,8 +176,8 @@ void cal_recall(const int *gt, const int *topk_ids, int topk, int gt_neighbors_p
     // --- Calculation ---
     long long total_hits = 0; // Use long long for safety against large batch/k
     // Optional: To calculate recall more strictly (sum of individual recalls / num_queries)
-    // double total_individual_recall_sum = 0.0;
-    // int valid_queries_for_strict_recall = 0; // Count queries with non-empty unique GT sets
+    double total_individual_recall_sum = 0.0;
+    int valid_queries_for_strict_recall = 0; // Count queries with non-empty unique GT sets
 
     // Iterate through each query in the batch
     for (int i = 0; i < batch_query_num; ++i)
@@ -185,7 +204,7 @@ void cal_recall(const int *gt, const int *topk_ids, int topk, int gt_neighbors_p
         }
 
         // The number of unique relevant items for *this* query (denominator for individual recall)
-        // size_t unique_gt_count_for_query = true_topk_gt_set.size();
+        size_t unique_gt_count_for_query = true_topk_gt_set.size();
 
         // if (unique_gt_count_for_query == 0 && topk > 0) {
         //     // Handle case where the top-k ground truth was empty or all duplicates of one item
@@ -220,14 +239,25 @@ void cal_recall(const int *gt, const int *topk_ids, int topk, int gt_neighbors_p
             }
         }
         total_hits += current_query_hits;
+        // if (i==0)
+        // printf("Query %d: Recall = %lf\n", i, current_query_hits / static_cast<double>(topk));
+        // Write recall for this query to a file
+        
+        
+        query_recall_file << "Query " << i << ": Recall = " 
+            << (current_query_hits / static_cast<double>(topk)) << std::endl;
+            
+        
 
         // Optional: Calculate individual recall and add to sum for strict average
-        // if (unique_gt_count_for_query > 0) {
-        //     total_individual_recall_sum += static_cast<double>(current_query_hits) / unique_gt_count_for_query;
-        //     valid_queries_for_strict_recall++;
-        // }
+        if (unique_gt_count_for_query > 0) {
+            total_individual_recall_sum += static_cast<double>(current_query_hits) / unique_gt_count_for_query;
+            valid_queries_for_strict_recall++;
+        }
 
     } // End loop over queries
+
+    query_recall_file.close();
 
     // --- Calculate and Print Average Recall ---
 
@@ -241,15 +271,15 @@ void cal_recall(const int *gt, const int *topk_ids, int topk, int gt_neighbors_p
     }
 
     // Definition 2 (Optional, more strict): Average of individual query recalls
-    // double strict_average_recall = 0.0;
-    // if (valid_queries_for_strict_recall > 0) {
-    //     strict_average_recall = total_individual_recall_sum / valid_queries_for_strict_recall;
-    // }
+    double strict_average_recall = 0.0;
+    if (valid_queries_for_strict_recall > 0) {
+        strict_average_recall = total_individual_recall_sum / valid_queries_for_strict_recall;
+    }
 
     std::cout << std::fixed << std::setprecision(6); // Set output precision
     std::cout << "Average Recall@" << topk << ": " << average_recall << std::endl;
     // If using the strict definition:
-    // std::cout << "Strict Average Recall@" << topk << ": " << strict_average_recall << std::endl;
+    std::cout << "Strict Average Recall@" << topk << ": " << strict_average_recall << std::endl;
 
 }
 

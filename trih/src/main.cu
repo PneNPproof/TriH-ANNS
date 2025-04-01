@@ -10,6 +10,7 @@
 #include <omp.h>
 #include <float.h>
 #include <atomic>
+#include <thread>
 
 #include <cuda_runtime.h>
 
@@ -17,6 +18,7 @@
 #include "shuffle.h"
 #include "utils.h"
 #include "dataset.h"
+#include "BS_thread_pool.hpp"
 
 #include "sq.h"
 
@@ -65,6 +67,7 @@ void gpu_warmup()
 
 // 全局变量
 sq_info *p_sq_info;
+BS::thread_pool rr_pool(12);
 
 // ThreadPool pool(20);
 vector<future<int>> results;
@@ -129,7 +132,7 @@ int main(int argc, char *argv[])
         int query_batch_size = atoi(argv[4]);
         int phase1_topk = atoi(argv[5]); // 每个section 获取 top1之后，top_k 指定筛选多少
         int phase2_topk = 100;
-        int rerank_thread_pool_size = 20;
+        int rerank_thread_pool_size = 12;
         int reduce_group_size = 125;
         int reduce_group_num = 8000;
 
@@ -213,34 +216,54 @@ int main(int argc, char *argv[])
         /// using multi_worker to process multiple query batches
         int *topk_ids = (int *)malloc(phase2_topk * query_batch_size * query_batch_num * sizeof(int));
 
-        auto multi_worker_thread_pool = new ThreadPool(num_workers);
-        std::vector<std::future<void>> multi_worker_results;
+        // auto multi_worker_thread_pool = new ThreadPool(num_workers);
+        // std::vector<std::future<void>> multi_worker_results;
+
+        std::vector<std::thread> workers_threads;
 
         auto multi_worker_search_begin = std::chrono::high_resolution_clock::now();
 
         for (int i = 0; i < num_workers; i++)
         {
-            multi_worker_results.emplace_back(multi_worker_thread_pool->enqueue(
+            // multi_worker_results.emplace_back(multi_worker_thread_pool->enqueue(
+            //     search_task,
+            //     workers[i],
+            //     batch_query,
+            //     query_batch_size,
+            //     topk_ids,
+            //     query_batch_num));
+            workers_threads.emplace_back(
                 search_task,
                 workers[i],
                 batch_query,
                 query_batch_size,
                 topk_ids,
-                query_batch_num));
+                query_batch_num);
         }
 
-        for (auto &&result : multi_worker_results)
+        // for (auto &&result : multi_worker_results)
+        // {
+        //     result.get();
+        // }
+
+        for (auto &&worker_thread : workers_threads)
         {
-            result.get();
+            worker_thread.join();
         }
 
+        auto multi_worker_search_end_1 = std::chrono::high_resolution_clock::now();
+        auto multi_worker_search_duration_1 = std::chrono::duration_cast<std::chrono::milliseconds>(multi_worker_search_end_1 - multi_worker_search_begin);
+        printf("multi worker done, duration = %lld ms\n", multi_worker_search_duration_1.count());
+        size_t qps_1 = (size_t)(query_batch_num * query_batch_size) * 1000 / multi_worker_search_duration_1.count();
+        printf("multi worker done, qps = %zu\n", qps_1);
         printf("multi worker done, wait for re-rank\n");
 
-        for (auto &&result : results)
-        {
-            result.get();
-        }
+        // for (auto &&result : results)
+        // {
+        //     result.get();
+        // }
 
+        rr_pool.wait();
         printf("re-rank done\n");
 
         auto multi_worker_search_end = std::chrono::high_resolution_clock::now();
@@ -251,6 +274,14 @@ int main(int argc, char *argv[])
 
         trih::cal_recall(batch_query_groundtruth, topk_ids, phase2_topk, gdata.neighbors_per_test, query_batch_num * query_batch_size);
         ///
+
+        /// free memory
+        for (int i = 0; i < num_workers; i++)
+        {
+            cudaStreamDestroy(streams[i]);
+        }
+        ///
+
 
         // int *topk_ids_2 = (int *)malloc(100 * query_batch_size * sizeof(int));
 

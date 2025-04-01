@@ -17,6 +17,8 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CUDA_SEPARABLE_COMPILATION ON)
 # set(CMAKE_CUDA_RUNTIME_LIBRARY Static)
 
+# set(CMAKE_CUDA_FLAGS_RELWITHDEBINFO "${CMAKE_CUDA_FLAGS_RELWITHDEBINFO} -lineinfo")
+
 add_compile_options(
   "$<$<COMPILE_LANGUAGE:CUDA>:--use_fast_math>"
   "$<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=-Wno-deprecated-declarations>"

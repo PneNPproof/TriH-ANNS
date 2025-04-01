@@ -5,6 +5,7 @@
 #include "rerank.cuh"
 #include "rerank.h"
 #include "sq.h"
+#include "BS_thread_pool.hpp"
 
 #include <cuda_runtime.h>
 #include <cub/util_allocator.cuh>
@@ -18,7 +19,7 @@
 std::mutex TrihAnnsWorker::thread_pool_mutex;
 
 extern sq_info *p_sq_info;
-
+extern BS::thread_pool<> rr_pool;
 extern vector<future<int>> results;
 
 // Define a kernel to convert half to float
@@ -947,48 +948,64 @@ void TrihAnnsWorker::batch_query_search
 
 
   {
-    std::lock_guard<std::mutex> lock(thread_pool_mutex);
+    // std::lock_guard<std::mutex> lock(thread_pool_mutex);
     // printf("re-renk task assign\n");
     for (int i=0; i<batch_query_num; i++)
     {
-      // printf("rerank query %d\n", i);
-      results.emplace_back(
-        rerank_thread_pool->enqueue(
-          re_rank2, 
-          base_dataset_h, 
-          base_dataset_norms_h,
-          batch_query + i * dim,
-          phase1_ids_h + i * phase1_topk,
-          phase1_topk,
-          data_num,
-          dim,
-          phase2_topk,
-          phase2_ids_h + i * phase2_topk
-        )
-      );
-
-      // float *distances = new float[phase1_topk];
-      // int *neighbors = new int[phase1_topk];
-
-      // for(int k=0; k<phase1_topk; k++)
-      //   distances[k] = __half2float(phase1_distances_h[phase1_topk * i + k]);
-      // memcpy(neighbors, phase1_ids_h + i * phase1_topk, sizeof(int) * phase1_topk);
-
+        rr_pool.detach_task(
+          [this, batch_query, i, phase2_ids_h]{
+            re_rank2(
+              this->base_dataset_h, 
+              this->base_dataset_norms_h,
+              batch_query + i * this->dim,
+              this->phase1_ids_h + i * this->phase1_topk,
+              this->phase1_topk,
+              this->data_num,
+              this->dim,
+              this->phase2_topk,
+              phase2_ids_h + i * this->phase2_topk
+            );
+          }
+        );
+    }
+  }
+    // printf("rerank query %d\n", i);
       // results.emplace_back(
       //   rerank_thread_pool->enqueue(
-      //     re_rank, 
-      //     batch_query + i * index.dim,
-      //     std::ref(index),
-      //     p_sq_info,
-      //     distances,
-      //     neighbors,
+      //     re_rank2, 
+      //     base_dataset_h, 
+      //     base_dataset_norms_h,
+      //     batch_query + i * dim,
+      //     phase1_ids_h + i * phase1_topk,
       //     phase1_topk,
+      //     data_num,
+      //     dim,
       //     phase2_topk,
       //     phase2_ids_h + i * phase2_topk
       //   )
       // );
-    }
-  }
+
+    //   // float *distances = new float[phase1_topk];
+    //   // int *neighbors = new int[phase1_topk];
+
+    //   // for(int k=0; k<phase1_topk; k++)
+    //   //   distances[k] = __half2float(phase1_distances_h[phase1_topk * i + k]);
+    //   // memcpy(neighbors, phase1_ids_h + i * phase1_topk, sizeof(int) * phase1_topk);
+
+    //   // results.emplace_back(
+    //   //   rerank_thread_pool->enqueue(
+    //   //     re_rank, 
+    //   //     batch_query + i * index.dim,
+    //   //     std::ref(index),
+    //   //     p_sq_info,
+    //   //     distances,
+    //   //     neighbors,
+    //   //     phase1_topk,
+    //   //     phase2_topk,
+    //   //     phase2_ids_h + i * phase2_topk
+    //   //   )
+    //   // );
+  
   ///
 
   // for (auto && result: results)

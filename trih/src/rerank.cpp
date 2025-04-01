@@ -227,7 +227,7 @@ void get_min_k_ids(const T* distance, const int* id, int n, int k, int *result, 
  * @note The function assumes all input arrays are properly allocated
  * @note Results are sorted in ascending order by distance
  */
-int re_rank2(
+void re_rank2(
   float* dataset, 
   float* dataset_squared_norms, 
   float *query, 
@@ -251,7 +251,7 @@ int re_rank2(
   //重新排序，获取最终结果
   get_min_k_ids(distances_buffer, phase1_topk_ids, phase1_topk, phase2_topk, phase2_topk_ids, (float*)NULL);
 
-  return 0;
+//   return 0;
 }
 
 
