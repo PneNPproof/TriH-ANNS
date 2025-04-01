@@ -109,7 +109,7 @@ int main(int argc, char *argv[])
         ofs.close();
     }
     else if (argv[2][0] == 's')
-    { // search,          command: ./pca data_filename s index_tag section_num(8000) top_k(300)
+    { // search,  command: ./pca data_filename s index_tag query_batch_size phase1_topk phase2_topk reduce_group_size num_workers batch_num_per_worker rerank_thread_pool_size
 
         std::cout << "Loading index ..." << std::endl;
 
@@ -131,13 +131,13 @@ int main(int argc, char *argv[])
 
         int query_batch_size = atoi(argv[4]);
         int phase1_topk = atoi(argv[5]); // 每个section 获取 top1之后，top_k 指定筛选多少
-        int phase2_topk = 100;
-        int rerank_thread_pool_size = 12;
-        int reduce_group_size = 125;
-        int reduce_group_num = 8000;
+        int phase2_topk = atoi(argv[6]);
+        int rerank_thread_pool_size = atoi(argv[10]);
+        int reduce_group_size = atoi(argv[7]);
+        int reduce_group_num = gdata.train_point_count / reduce_group_size;
 
         /// create multi worker
-        int num_workers = atoi(argv[6]);
+        int num_workers = atoi(argv[8]);
         int max_queries_num = 1000;
         vector<cudaStream_t> streams(num_workers);
         vector<TrihAnnsWorker *> workers(num_workers);
@@ -173,7 +173,7 @@ int main(int argc, char *argv[])
         ///
 
         /// prepare query batch
-        int batch_num_per_worker = atoi(argv[7]);
+        int batch_num_per_worker = atoi(argv[9]);
         int query_batch_num = num_workers * batch_num_per_worker;
 
         // float *batch_query = (float *)aligned_alloc(64, query_batch_num * query_batch_size * gdata.dim * sizeof(float));
