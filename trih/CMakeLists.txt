@@ -20,8 +20,12 @@ set(CMAKE_CUDA_SEPARABLE_COMPILATION ON)
 # set(CMAKE_CUDA_FLAGS_RELWITHDEBINFO "${CMAKE_CUDA_FLAGS_RELWITHDEBINFO} -lineinfo")
 
 add_compile_options(
-  "$<$<COMPILE_LANGUAGE:CUDA>:--use_fast_math>"
+#   "$<$<COMPILE_LANGUAGE:CUDA>:--use_fast_math>"
   "$<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=-Wno-deprecated-declarations>"
+)
+
+add_compile_options(
+  "$<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr>"
 )
 
 add_compile_options(
@@ -29,7 +33,7 @@ add_compile_options(
     "$<$<COMPILE_LANGUAGE:CXX>:-mtune=native>"
     # "$<$<COMPILE_LANGUAGE:CXX>:-flto>"
     "$<$<COMPILE_LANGUAGE:CXX>:-mavx512f>"
-    "$<$<COMPILE_LANGUAGE:CXX>:-ffast-math>"
+    # "$<$<COMPILE_LANGUAGE:CXX>:-ffast-math>"
     "$<$<COMPILE_LANGUAGE:CXX>:-funroll-loops>"
 )
 

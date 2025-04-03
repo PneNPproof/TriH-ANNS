@@ -47,6 +47,17 @@ public:
           ElementAccumulator, ElementAccumulator>,
       cutlass::gemm::threadblock::GemmIdentityThreadblockSwizzle<>, 3>;
 
+  // using Gemm = cutlass::gemm::device::Gemm<
+  //     cutlass::half_t, cutlass::layout::RowMajor, cutlass::half_t,
+  //     cutlass::layout::ColumnMajor, ElementOutput, cutlass::layout::ColumnMajor,
+  //     ElementAccumulator, cutlass::arch::OpClassTensorOp, cutlass::arch::Sm80,
+  //     cutlass::gemm::GemmShape<64, 64, 32>,
+  //     cutlass::gemm::GemmShape<32, 32, 32>, cutlass::gemm::GemmShape<16, 8, 16>,
+  //     cutlass::epilogue::thread::LinearCombination<
+  //         ElementOutput, 128 / cutlass::sizeof_bits<ElementOutput>::value,
+  //         ElementAccumulator, ElementAccumulator>,
+  //     cutlass::gemm::threadblock::GemmIdentityThreadblockSwizzle<>, 10>;
+
   ElementOutput alpha;
   ElementOutput beta;
   Gemm gemm_op;
@@ -70,9 +81,9 @@ public:
   half* half_pca_queries_d;
   half* half_pca_dataset_norms_d;
   half* half_dists_d;
-  half* alpha_d;
-  half* beta_d;
-  half* alpha1_d;
+  // half* alpha_d;
+  // half* beta_d;
+  // half* alpha1_d;
   cublasHandle_t handle;
 /// fro l2mm
 
@@ -91,7 +102,7 @@ public:
 
 /// for re-rank
   half *phase1_distances_h;
-  int *phase1_ids_h;
+  // int *phase1_ids_h;
   float* base_dataset_h;
   float* pca_dataset_h;
   float* base_dataset_norms_h;
@@ -110,6 +121,9 @@ public:
   int phase2_topk;
 
   cudaStream_t work_stream;
+
+  float *float_alpha0_d;
+  float *float_beta0_d;
 
   TrihAnnsWorker
   (
@@ -138,7 +152,9 @@ public:
   (
     float *batch_query,
     int batch_query_num,
+    int *phase1_ids_h,
     int *phase2_ids_h
+    , bool verbose
   );
 };
 
@@ -147,6 +163,7 @@ void search_task(
   TrihAnnsWorker *worker,
   float *batch_query,
   int batch_query_num,
+  int *phase1_ids_h,
   int *phase2_ids_h,
   int query_batch_num
 );

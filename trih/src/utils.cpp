@@ -87,45 +87,6 @@ void build_index(float *base, int dimension, int size, int &column_num, float &r
 void cal_recall(const int *gt, const int *topk_ids, int topk, int gt_neighbors_per_query, int batch_query_num)
 {
 
-    // Write topk_ids to file
-    // std::ofstream topk_file("log/topk_results_2.txt");
-    // if (!topk_file.is_open()) {
-    //     std::cerr << "Error: Could not open file for writing topk_ids." << std::endl;
-    //     return;
-    // }
-    
-    // for (int i = 0; i < batch_query_num; ++i) {
-    //     for (int j = 0; j < topk; ++j) {
-    //         topk_file << topk_ids[i * topk + j] << " ";
-    //     }
-    //     topk_file << std::endl;
-    // }
-    
-    // topk_file.close();
-    // std::cout << "Top-k IDs written to topk_results.txt" << std::endl;
-
-    // // print gt and topk_ids
-    // std::cout << "Ground Truth IDs (gt):" << std::endl;
-    // for (int i = 0; i < batch_query_num; ++i)
-    // {
-    //     std::cout << "Query " << i << ": ";
-    //     for (int j = 0; j < gt_neighbors_per_query; ++j)
-    //     {
-    //         std::cout << gt[i * gt_neighbors_per_query + j] << " ";
-    //     }
-    //     std::cout << std::endl;
-    // }
-    // std::cout << "Top-k IDs:" << std::endl;
-    // for (int i = 0; i < batch_query_num; ++i)
-    // {
-    //     std::cout << "Query " << i << ": ";
-    //     for (int j = 0; j < topk; ++j)
-    //     {
-    //         std::cout << topk_ids[i * topk + j] << " ";
-    //     }
-    //     std::cout << std::endl;
-    // }
-
     std::ofstream query_recall_file("log/query_recalls.txt");
 
     // --- Input Validation ---
@@ -244,8 +205,8 @@ void cal_recall(const int *gt, const int *topk_ids, int topk, int gt_neighbors_p
         // Write recall for this query to a file
         
         
-        query_recall_file << "Query " << i << ": Recall = " 
-            << (current_query_hits / static_cast<double>(topk)) << std::endl;
+        // query_recall_file << "Query " << i << ": Recall = " 
+        //     << (current_query_hits / static_cast<double>(topk)) << std::endl;
             
         
 

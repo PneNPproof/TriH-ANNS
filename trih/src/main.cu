@@ -69,8 +69,10 @@ void gpu_warmup()
 sq_info *p_sq_info;
 BS::thread_pool rr_pool(12);
 
+int file_ind;
+
 // ThreadPool pool(20);
-vector<future<int>> results;
+// vector<future<int>> results;
 
 atomic<int> query_batch_counter(0);
 
@@ -136,9 +138,12 @@ int main(int argc, char *argv[])
         int reduce_group_size = atoi(argv[7]);
         int reduce_group_num = gdata.train_point_count / reduce_group_size;
 
+        file_ind = atoi(argv[11]);
+
         /// create multi worker
         int num_workers = atoi(argv[8]);
         int max_queries_num = 1000;
+
         vector<cudaStream_t> streams(num_workers);
         vector<TrihAnnsWorker *> workers(num_workers);
         for (int i = 0; i < num_workers; i++)
@@ -196,55 +201,41 @@ int main(int argc, char *argv[])
         float *warmup_batch_query = (float *)aligned_alloc(64, query_batch_size * index.dim * sizeof(float));
         for (int i = 0; i < query_batch_size * index.dim; i++)
         {
-            warmup_batch_query[i] = rand() / (float)RAND_MAX;
+            // warmup_batch_query[i] = rand() / (float)RAND_MAX;
+            warmup_batch_query[i] = 0;
         }
-
+        int *candidate_topk_ids_1 = (int *)malloc(phase1_topk * query_batch_size * sizeof(int));
         int *topk_ids_1 = (int *)malloc(phase2_topk * query_batch_size * sizeof(int));
 
         workers[0]->batch_query_search(
             warmup_batch_query,
             query_batch_size,
-            topk_ids_1);
-        for (auto &&result : results)
-        {
-            result.get();
-        }
-        results.clear();
+            candidate_topk_ids_1,
+            topk_ids_1,
+            false);
+        rr_pool.wait();
         printf("warm up done\n");
         ///
 
         /// using multi_worker to process multiple query batches
+        int *candidate_topk_ids = (int *)malloc(phase1_topk * query_batch_size * query_batch_num * sizeof(int));
+
         int *topk_ids = (int *)malloc(phase2_topk * query_batch_size * query_batch_num * sizeof(int));
-
-        // auto multi_worker_thread_pool = new ThreadPool(num_workers);
-        // std::vector<std::future<void>> multi_worker_results;
-
         std::vector<std::thread> workers_threads;
 
         auto multi_worker_search_begin = std::chrono::high_resolution_clock::now();
 
         for (int i = 0; i < num_workers; i++)
         {
-            // multi_worker_results.emplace_back(multi_worker_thread_pool->enqueue(
-            //     search_task,
-            //     workers[i],
-            //     batch_query,
-            //     query_batch_size,
-            //     topk_ids,
-            //     query_batch_num));
             workers_threads.emplace_back(
                 search_task,
                 workers[i],
                 batch_query,
                 query_batch_size,
+                candidate_topk_ids,
                 topk_ids,
                 query_batch_num);
         }
-
-        // for (auto &&result : multi_worker_results)
-        // {
-        //     result.get();
-        // }
 
         for (auto &&worker_thread : workers_threads)
         {
@@ -253,19 +244,32 @@ int main(int argc, char *argv[])
 
         auto multi_worker_search_end_1 = std::chrono::high_resolution_clock::now();
         auto multi_worker_search_duration_1 = std::chrono::duration_cast<std::chrono::milliseconds>(multi_worker_search_end_1 - multi_worker_search_begin);
-        printf("multi worker done, duration = %lld ms\n", multi_worker_search_duration_1.count());
-        size_t qps_1 = (size_t)(query_batch_num * query_batch_size) * 1000 / multi_worker_search_duration_1.count();
-        printf("multi worker done, qps = %zu\n", qps_1);
-        printf("multi worker done, wait for re-rank\n");
-
-        // for (auto &&result : results)
-        // {
-        //     result.get();
-        // }
+        printf("multi worker gpu calculation done, duration = %lld ms, qps = %zu, wait for re-rank\n", 
+               multi_worker_search_duration_1.count(), 
+               (size_t)(query_batch_num * query_batch_size) * 1000 / multi_worker_search_duration_1.count());
 
         rr_pool.wait();
         printf("re-rank done\n");
 
+        /// Write phase2_ids_h to binary file for debugging
+        // char fn_phase2[256];
+        // snprintf(fn_phase2, sizeof(fn_phase2), "log/phase2_ids_%d.bin", file_ind);
+        // FILE* fp = fopen(fn_phase2, "wb");
+        // if (fp) {
+        // // Write metadata (number of queries and topk size)
+        // int meta[2] = {query_batch_size, phase2_topk};
+        // fwrite(meta, sizeof(int), 2, fp);
+        
+        // // Write phase2 IDs
+        // fwrite(topk_ids, sizeof(int), query_batch_size * phase2_topk, fp);
+        
+        // fclose(fp);
+        // printf("Phase2 IDs written to %s\n", fn_phase2);
+        // } else {
+        // printf("Failed to open output file for writing phase2 IDs\n");
+        // }
+        ///
+  
         auto multi_worker_search_end = std::chrono::high_resolution_clock::now();
         auto multi_worker_search_duration = std::chrono::duration_cast<std::chrono::milliseconds>(multi_worker_search_end - multi_worker_search_begin);
 

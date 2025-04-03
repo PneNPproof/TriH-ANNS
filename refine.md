@@ -18,3 +18,26 @@ Two-stage invocation: the first stage invocation is not only for calculating tem
 sizeof(half) * 8 get low recall
 sizeof(float) * 8 get high recall
 ```
+### about re-rank task submission
+
+```cpp
+for (int i=0; i<batch_query_num; i++)
+    {
+        rr_pool.detach_task(
+          [this, batch_query, i, phase2_ids_h]{
+            re_rank2(
+              this->base_dataset_h, 
+              this->base_dataset_norms_h,
+              batch_query + i * this->dim,
+              this->phase1_ids_h + i * this->phase1_topk,
+              this->phase1_topk,
+              this->data_num,
+              this->dim,
+              this->phase2_topk,
+              phase2_ids_h + i * this->phase2_topk
+            );
+          }
+        );
+    }
+```
+To ensure that a worker can be immediately available for the next batch of queries after submitting a rerank task, it is necessary to guarantee that the previous rerank task no longer depends on a certain data structure of the worker. Here, an obvious dependency is `phase1_ids_h`, as the next batch of queries might modify the content of this structure, causing issues in the rerank process of the previous batch.

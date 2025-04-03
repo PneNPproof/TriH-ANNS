@@ -1,11 +1,12 @@
 import sys
 import os
 
-def compare_topk_files_all_diffs(file1_path, file2_path):
+def compare_files_print_diff_lines(file1_path, file2_path):
     """
-    Compares two text files containing space-separated IDs line by line.
+    Compares two text files line by line.
 
-    Reports ALL differences found, including line number and token position.
+    Prints only the line numbers where differences occur.
+    Also reports if files have different lengths.
 
     Args:
         file1_path (str): Path to the first file.
@@ -13,10 +14,12 @@ def compare_topk_files_all_diffs(file1_path, file2_path):
 
     Returns:
         bool: True if files are identical, False otherwise.
-              Prints all difference details to stdout if not identical.
+              Prints differing line numbers to stdout if not identical.
               Prints error details to stderr if files cannot be opened.
     """
     any_difference_found = False
+    differing_lines = []
+    length_mismatch_line = None
     f1_basename = os.path.basename(file1_path)
     f2_basename = os.path.basename(file2_path)
 
@@ -30,72 +33,42 @@ def compare_topk_files_all_diffs(file1_path, file2_path):
 
                 # --- Check for end of files ---
                 if not line1 and not line2:
-                    # Both files ended at the same time, break the loop
+                    # Both files ended at the same time
                     break
                 elif not line1:
                     # File 1 ended, but File 2 has more lines
-                    if not any_difference_found: # Print header only once for length diff
-                         print("-" * 20) # Separator
-                    print(f"Difference: File 1 ('{f1_basename}') ended prematurely.")
-                    print(f"  File 2 ('{f2_basename}') has extra content starting at line {line_num}.")
-                    print(f"  Line {line_num} in File 2: '{line2.strip()}'")
                     any_difference_found = True
-                    # Continue reading and printing remaining lines from file 2
-                    while True:
-                        line2 = f2.readline()
-                        if not line2:
-                            break
-                        line_num += 1
-                        print(f"  Extra Line {line_num} in File 2: '{line2.strip()}'")
-                    break # Reached end of file 2, exit main loop
+                    length_mismatch_line = line_num # Record where the mismatch starts
+                    print(f"Difference: File 1 ('{f1_basename}') ends prematurely at line {line_num - 1}.")
+                    print(f"           File 2 ('{f2_basename}') has additional lines starting from line {line_num}.")
+                    break # Stop comparison
                 elif not line2:
                     # File 2 ended, but File 1 has more lines
-                    if not any_difference_found: # Print header only once for length diff
-                         print("-" * 20) # Separator
-                    print(f"Difference: File 2 ('{f2_basename}') ended prematurely.")
-                    print(f"  File 1 ('{f1_basename}') has extra content starting at line {line_num}.")
-                    print(f"  Line {line_num} in File 1: '{line1.strip()}'")
                     any_difference_found = True
-                    # Continue reading and printing remaining lines from file 1
-                    while True:
-                        line1 = f1.readline()
-                        if not line1:
-                            break
-                        line_num += 1
-                        print(f"  Extra Line {line_num} in File 1: '{line1.strip()}'")
-                    break # Reached end of file 1, exit main loop
+                    length_mismatch_line = line_num # Record where the mismatch starts
+                    print(f"Difference: File 2 ('{f2_basename}') ends prematurely at line {line_num - 1}.")
+                    print(f"           File 1 ('{f1_basename}') has additional lines starting from line {line_num}.")
+                    break # Stop comparison
 
                 # --- Compare lines if both have content ---
+                # Strip leading/trailing whitespace for comparison
                 stripped_line1 = line1.strip()
                 stripped_line2 = line2.strip()
 
                 if stripped_line1 != stripped_line2:
-                    # Lines differ, find and report all differing tokens on this line
-                    if not any_difference_found:
-                         print("-" * 20) # Separator before first reported difference
-                    any_difference_found = True # Mark that at least one difference exists
-                    print(f"Difference found on Line {line_num}:")
-                    print(f"  (Full Line File 1: '{stripped_line1}')")
-                    print(f"  (Full Line File 2: '{stripped_line2}')")
-
-                    tokens1 = stripped_line1.split()
-                    tokens2 = stripped_line2.split()
-                    max_len = max(len(tokens1), len(tokens2))
-
-                    for i in range(max_len):
-                        token1 = tokens1[i] if i < len(tokens1) else "<MISSING>"
-                        token2 = tokens2[i] if i < len(tokens2) else "<MISSING>"
-
-                        if token1 != token2:
-                            print(f"  - Position {i + 1}: File 1='{token1}', File 2='{token2}'")
-                    print("-" * 20) # Separator after each differing line's details
+                    if not any_difference_found: # Print header only once
+                         print("Differences found on the following lines:")
+                    any_difference_found = True
+                    print(f"  - Line {line_num}")
+                    # Don't need to compare tokens anymore, just note the line difference
 
             # --- End of file comparison ---
             if not any_difference_found:
                 print(f"Files '{f1_basename}' and '{f2_basename}' are identical.")
                 return True
             else:
-                print("\nComparison finished. Differences listed above.")
+                # A summary message isn't strictly necessary as details were printed above
+                # print("\nComparison finished. Differences reported above.")
                 return False
 
     except FileNotFoundError as e:
@@ -115,7 +88,7 @@ if __name__ == "__main__":
     file2 = sys.argv[2]
 
     print(f"Comparing '{file1}' and '{file2}'...")
-    files_are_identical = compare_topk_files_all_diffs(file1, file2)
+    files_are_identical = compare_files_print_diff_lines(file1, file2)
 
     if files_are_identical:
         sys.exit(0) # Exit successfully

@@ -172,25 +172,74 @@ void save_pca_index(float *data, int dim, int record_num, //原始数据
 
 void load_pca_index(ifstream &ifs, pca_index &index) {
 
-    ifs.read((char *)&index.dim, sizeof(int)); //数据维度，960
-    ifs.read((char *)&index.record_num, sizeof(int)); //数据向量个数
-    ifs.read((char *)&index.column_num, sizeof(int)); //特征向量个数，128
-    ifs.read((char *)&index.ratio, sizeof(float)); //比率
-
-    // index.pca_data = new float[index.dim*index.dim]{0};
-    index.pca_data = static_cast<float*>(aligned_alloc(64, sizeof(float)*index.dim*index.dim));
-    ifs.read((char *)index.pca_data, sizeof(float)*index.dim*index.dim);
-
-    // index.trans_data = new float[index.record_num*index.column_num];
-    index.trans_data = static_cast<float*>(aligned_alloc(64, sizeof(float)*index.record_num*index.column_num));
-    ifs.read((char *)index.trans_data, sizeof(float)*index.record_num*index.column_num);
-
-    if(index.dim <= index.column_num)
+    // Read dimensions and parameters
+    if (!ifs.read((char *)&index.dim, sizeof(int)) || 
+        !ifs.read((char *)&index.record_num, sizeof(int)) ||
+        !ifs.read((char *)&index.column_num, sizeof(int)) ||
+        !ifs.read((char *)&index.ratio, sizeof(float))) {
+        std::cerr << "Error: Failed to read PCA index header from file." << std::endl;
         return;
+    }
+
+    // Validate the dimensions
+    if (index.dim <= 0 || index.record_num <= 0 || index.column_num <= 0 || 
+        index.column_num > index.dim || index.ratio <= 0 || index.ratio > 1) {
+        std::cerr << "Error: Invalid PCA index parameters in file." << std::endl;
+        return;
+    }
+
+    // Allocate memory for PCA data
+    index.pca_data = static_cast<float*>(aligned_alloc(64, sizeof(float)*index.dim*index.dim));
+    if (!index.pca_data) {
+        std::cerr << "Error: Failed to allocate memory for PCA data." << std::endl;
+        return;
+    }
+
+    // Read PCA data
+    if (!ifs.read((char *)index.pca_data, sizeof(float)*index.dim*index.dim)) {
+        std::cerr << "Error: Failed to read PCA data from file." << std::endl;
+        free(index.pca_data);
+        return;
+    }
+
+    // Allocate memory for transformed data
+    index.trans_data = static_cast<float*>(aligned_alloc(64, sizeof(float)*index.record_num*index.column_num));
+    if (!index.trans_data) {
+        std::cerr << "Error: Failed to allocate memory for transformed data." << std::endl;
+        free(index.pca_data);
+        return;
+    }
+
+    // Read transformed data
+    if (!ifs.read((char *)index.trans_data, sizeof(float)*index.record_num*index.column_num)) {
+        std::cerr << "Error: Failed to read transformed data from file." << std::endl;
+        free(index.pca_data);
+        free(index.trans_data);
+        return;
+    }
+
+    if(index.dim <= index.column_num) {
+        index.trans_data_remain = nullptr;
+        return;
+    }
         
-    // index.trans_data_remain = new float[index.record_num*(index.dim-index.column_num)];
+    // Allocate memory for remaining data
     index.trans_data_remain = static_cast<float*>(aligned_alloc(64, sizeof(float)*(index.record_num*(index.dim-index.column_num))));
-    ifs.read((char *)index.trans_data_remain, sizeof(float)*index.record_num*(index.dim-index.column_num));
+    if (!index.trans_data_remain) {
+        std::cerr << "Error: Failed to allocate memory for remaining data." << std::endl;
+        free(index.pca_data);
+        free(index.trans_data);
+        return;
+    }
+
+    // Read remaining data
+    if (!ifs.read((char *)index.trans_data_remain, sizeof(float)*index.record_num*(index.dim-index.column_num))) {
+        std::cerr << "Error: Failed to read remaining data from file." << std::endl;
+        free(index.pca_data);
+        free(index.trans_data);
+        free(index.trans_data_remain);
+        return;
+    }
 }
 
 
