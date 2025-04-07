@@ -17,6 +17,8 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CUDA_SEPARABLE_COMPILATION ON)
 # set(CMAKE_CUDA_RUNTIME_LIBRARY Static)
 
+find_package(OpenMP REQUIRED)
+
 # set(CMAKE_CUDA_FLAGS_RELWITHDEBINFO "${CMAKE_CUDA_FLAGS_RELWITHDEBINFO} -lineinfo")
 
 add_compile_options(
@@ -90,6 +92,8 @@ target_link_libraries(${TARGET_NAME} PRIVATE
     # ${CUBLASLT_LIBRARY}
     ${CUBLAS_LIBRARY}
 )
+
+target_link_libraries(${TARGET_NAME} PRIVATE OpenMP::OpenMP_CXX)
 
 # set_target_properties(${TARGET_NAME} PROPERTIES
 #     LINK_SEARCH_START_STATIC 1
