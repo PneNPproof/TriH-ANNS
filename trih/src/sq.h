@@ -22,11 +22,11 @@ struct sq_info {//单个向量的信息
 
     uint8_t *quant_x_uint8;
 
-    sq_info() {
+    sq_info(int dim) {
         xx = 0;
         sum_quant_x = sum_quant_xx = 0;
 
-        quant_x_uint8 = static_cast<uint8_t*>(aligned_alloc(64, DIM)); //new uint8_t[DIM];
+        quant_x_uint8 = static_cast<uint8_t*>(aligned_alloc(64, dim)); //new uint8_t[DIM];
     }
 
     ~sq_info() {

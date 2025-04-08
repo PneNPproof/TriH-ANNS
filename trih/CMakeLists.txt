@@ -22,7 +22,7 @@ find_package(OpenMP REQUIRED)
 # set(CMAKE_CUDA_FLAGS_RELWITHDEBINFO "${CMAKE_CUDA_FLAGS_RELWITHDEBINFO} -lineinfo")
 
 add_compile_options(
-#   "$<$<COMPILE_LANGUAGE:CUDA>:--use_fast_math>"
+  "$<$<COMPILE_LANGUAGE:CUDA>:--use_fast_math>"
   "$<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=-Wno-deprecated-declarations>"
 )
 
@@ -35,7 +35,7 @@ add_compile_options(
     "$<$<COMPILE_LANGUAGE:CXX>:-mtune=native>"
     # "$<$<COMPILE_LANGUAGE:CXX>:-flto>"
     "$<$<COMPILE_LANGUAGE:CXX>:-mavx512f>"
-    # "$<$<COMPILE_LANGUAGE:CXX>:-ffast-math>"
+    "$<$<COMPILE_LANGUAGE:CXX>:-ffast-math>"
     "$<$<COMPILE_LANGUAGE:CXX>:-funroll-loops>"
 )
 

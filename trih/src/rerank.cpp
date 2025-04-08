@@ -3,6 +3,8 @@
 #include <immintrin.h>
 #include <iostream>
 
+#include <cuda_fp16.h>
+
 #include "distance.h"
 #include "rerank.h"
 #include "pca.h"
@@ -269,39 +271,35 @@ float distance_compensation_sq_precomputing_avx(uint8_t *qq, float min_q, uint32
 
 int re_rank(
     float *query,
-    pca_index &index,
+    uint8_t *quant_query,
+    float *query_remain,
+    int dim,
+    int pca_dim,
     sq_info *p_sq_info,
-    float *distances,
-    int *ids,
-    int size,
-    int final_topk,
-    int *final_topk_ids
-){
-
-    float *q_proj_remain = static_cast<float*>(aligned_alloc(64, sizeof(float)*(index.dim - index.column_num)));
-    queryProjectRest2(query, index, q_proj_remain);
+    half *phase1_topk_dists,
+    int *phase1_topk_ids,
+    int phase1_topk,
+    int *phase2_topk_ids,
+    int phase2_topk
+)
+{
+    std::vector<float> distances(phase1_topk);
 
     //针对query remain 进行量化
     float min_q, max_q, scale_q;
-    uint8_t *qq = static_cast<uint8_t*>(aligned_alloc(64, index.dim-index.column_num));
-    // scalar_quantize(q_proj_remain, qq, index.dim-index.column_num, 8, &min_q, &max_q, &scale_q);
+    // uint8_t *qq = static_cast<uint8_t*>(aligned_alloc(64, index.dim-index.column_num));
+    scalar_quantize(query_remain, quant_query, dim - pca_dim, 8, &min_q, &max_q, &scale_q);
     uint32_t sum_qq = 0;
-    // for(int i=0; i<index.dim-index.column_num; i++) sum_qq += qq[i];
+    for(int i=0; i<dim - pca_dim; i++) sum_qq += quant_query[i];
 
     //距离补偿
     // #pragma omp parallel for
-    for(int i=0; i<size; i++) {
-        distances[i] += distance_compensation_sq_precomputing_avx(qq, min_q, sum_qq, scale_q, index.dim-index.column_num, p_sq_info[ids[i]]);
+    for(int i=0; i<phase1_topk; i++) {
+        distances[i] = __half2float(phase1_topk_dists[i]) + distance_compensation_sq_precomputing_avx(quant_query, min_q, sum_qq, scale_q, dim - pca_dim, p_sq_info[phase1_topk_ids[i]]);
     }
 
-    // free(qq); 
-
     //重新排序，获取最终结果
-    get_min_k_ids(distances, ids, size, final_topk, final_topk_ids, (float*)NULL);
-
-    // free(q_proj_remain);
-    // delete [] distances;
-    // delete [] ids;
+    get_min_k_ids(distances.data(), phase1_topk_ids, phase1_topk, phase2_topk, phase2_topk_ids, (float*)NULL);
 
     return 0;
 }

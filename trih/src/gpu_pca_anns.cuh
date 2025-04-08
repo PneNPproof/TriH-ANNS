@@ -1,6 +1,7 @@
 #pragma once
 
 #include <mutex>
+#include <memory>
 
 #include <cuda_fp16.h>
 #include <cublas_v2.h>
@@ -14,6 +15,7 @@
 #include "pca.h"
 #include "thread_pool_v2.h"
 #include "l2mm.cuh"
+#include "sq.h"
 
 void gpu_anns
 (
@@ -35,7 +37,8 @@ public:
 
 /// for cutlass gemm
   using ElementOutput = cutlass::half_t;
-  using ElementAccumulator = cutlass::half_t;
+  // using ElementAccumulator = cutlass::half_t;
+  using ElementAccumulator = float;
   using Gemm = cutlass::gemm::device::Gemm<
       cutlass::half_t, cutlass::layout::RowMajor, cutlass::half_t,
       cutlass::layout::ColumnMajor, ElementOutput, cutlass::layout::ColumnMajor,
@@ -60,6 +63,8 @@ public:
 
   ElementOutput alpha;
   ElementOutput beta;
+  ElementOutput* alpha_d;
+  ElementOutput* beta_d;
   Gemm gemm_op;
   cutlass::device_memory::allocation<uint8_t> gemm_workspace;
 ///
@@ -68,10 +73,13 @@ public:
   float* full_dim_pca_data_d;
   float* full_dim_pca_data_h;
   float* pca_dim_pca_data_d;
+  float* remain_dim_pca_data_d;
   half* half_pca_dim_pca_data_d;
   float* batch_query_d;
   half* half_batch_query_d;
   float* pca_batch_query_d;
+  float* remain_batch_query_d;
+  float* remain_batch_query_h;
   half* alpha0_d;
   half* beta0_d;
 /// for query project
@@ -81,9 +89,6 @@ public:
   half* half_pca_queries_d;
   half* half_pca_dataset_norms_d;
   half* half_dists_d;
-  // half* alpha_d;
-  // half* beta_d;
-  // half* alpha1_d;
   cublasHandle_t handle;
 /// fro l2mm
 
@@ -102,13 +107,13 @@ public:
 
 /// for re-rank
   half *phase1_distances_h;
-  // int *phase1_ids_h;
   float* base_dataset_h;
   float* pca_dataset_h;
   float* base_dataset_norms_h;
-  // int *phase2_ids_h;
   ThreadPool *rerank_thread_pool;
   static std::mutex thread_pool_mutex;
+  uint8_t* quant_queries_h;
+  std::shared_ptr< std::vector<sq_info>> sq_info_h; 
 /// for re-rank
 
   int data_num;
@@ -122,11 +127,12 @@ public:
 
   cudaStream_t work_stream;
 
-  float *float_alpha0_d;
-  float *float_beta0_d;
+  float *falpha_d;
+  float *fbeta_d;
 
   TrihAnnsWorker
   (
+    pca_index &index,
     float *full_dim_pca_data,
     float *base_dataset,
     float *pca_dataset,
@@ -152,9 +158,10 @@ public:
   (
     float *batch_query,
     int batch_query_num,
+    half *phase1_distances_h,
     int *phase1_ids_h,
-    int *phase2_ids_h
-    , bool verbose
+    int *phase2_ids_h,
+    bool verbose
   );
 };
 
@@ -163,6 +170,7 @@ void search_task(
   TrihAnnsWorker *worker,
   float *batch_query,
   int batch_query_num,
+  half *phase1_distances_h,
   int *phase1_ids_h,
   int *phase2_ids_h,
   int query_batch_num

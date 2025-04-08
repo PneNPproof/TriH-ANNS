@@ -23,12 +23,15 @@ void re_rank2(
 
 
 int re_rank(
-  float *query, 
-  pca_index &index,
+  float *query,
+  uint8_t *quant_query,
+  float *query_remain,
+  int dim,
+  int pca_dim,
   sq_info *p_sq_info,
-  float *distances,
-  int *ids,
-  int size,
-  int final_topk,
-  int *final_topk_ids
+  half *phase1_topk_dists,
+  int *phase1_topk_ids,
+  int phase1_topk,
+  int *phase2_topk_ids,
+  int phase2_topk
 );

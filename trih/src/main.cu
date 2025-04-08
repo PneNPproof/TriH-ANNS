@@ -67,7 +67,8 @@ void gpu_warmup()
 
 // 全局变量
 sq_info *p_sq_info;
-BS::thread_pool rr_pool(12);
+// BS::thread_pool rr_pool(12);
+BS::thread_pool<>* rr_pool;
 
 int file_ind;
 
@@ -138,6 +139,7 @@ int main(int argc, char *argv[])
         int reduce_group_size = atoi(argv[7]);
         int reduce_group_num = gdata.train_point_count / reduce_group_size;
 
+        rr_pool = new BS::thread_pool<>(rerank_thread_pool_size);
         file_ind = atoi(argv[11]);
 
         /// create multi worker
@@ -152,6 +154,7 @@ int main(int argc, char *argv[])
         }
 
         TrihAnnsWorker worker(
+            index,
             index.pca_data,
             gdata.train,
             index.trans_data,
@@ -204,20 +207,24 @@ int main(int argc, char *argv[])
             // warmup_batch_query[i] = rand() / (float)RAND_MAX;
             warmup_batch_query[i] = 0;
         }
+        half *candidate_topk_dists_1 = (half *)malloc(phase1_topk * query_batch_size * sizeof(half));
         int *candidate_topk_ids_1 = (int *)malloc(phase1_topk * query_batch_size * sizeof(int));
         int *topk_ids_1 = (int *)malloc(phase2_topk * query_batch_size * sizeof(int));
 
         workers[0]->batch_query_search(
             warmup_batch_query,
             query_batch_size,
+            candidate_topk_dists_1,
             candidate_topk_ids_1,
             topk_ids_1,
             false);
-        rr_pool.wait();
+        
+        rr_pool->wait();
         printf("warm up done\n");
         ///
 
         /// using multi_worker to process multiple query batches
+        half *candidate_topk_dists = (half *)malloc(phase1_topk * query_batch_size * query_batch_num * sizeof(half));
         int *candidate_topk_ids = (int *)malloc(phase1_topk * query_batch_size * query_batch_num * sizeof(int));
 
         int *topk_ids = (int *)malloc(phase2_topk * query_batch_size * query_batch_num * sizeof(int));
@@ -232,6 +239,7 @@ int main(int argc, char *argv[])
                 workers[i],
                 batch_query,
                 query_batch_size,
+                candidate_topk_dists,
                 candidate_topk_ids,
                 topk_ids,
                 query_batch_num);
@@ -248,7 +256,8 @@ int main(int argc, char *argv[])
                multi_worker_search_duration_1.count(), 
                (size_t)(query_batch_num * query_batch_size) * 1000 / multi_worker_search_duration_1.count());
 
-        rr_pool.wait();
+        // rr_pool.wait();
+        rr_pool->wait();
         printf("re-rank done\n");
 
         /// Write phase2_ids_h to binary file for debugging
