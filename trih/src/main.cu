@@ -34,7 +34,7 @@ using namespace std;
 // sq_info *p_sq_info;
 // BS::thread_pool rr_pool(12);
 BS::thread_pool<>* rr_pool;
-BS::thread_pool rerank_task_scheduler_pool(4);
+// BS::thread_pool rerank_task_scheduler_pool(4);
 int file_ind;
 atomic<int> query_batch_counter(0);
 
