@@ -34,6 +34,7 @@ using namespace std;
 // sq_info *p_sq_info;
 // BS::thread_pool rr_pool(12);
 BS::thread_pool<>* rr_pool;
+BS::thread_pool rerank_task_scheduler_pool(4);
 int file_ind;
 atomic<int> query_batch_counter(0);
 
@@ -170,6 +171,8 @@ int main(int argc, char *argv[])
         half *candidate_topk_dists_1 = (half *)malloc(phase1_topk * query_batch_size * sizeof(half));
         int *candidate_topk_ids_1 = (int *)malloc(phase1_topk * query_batch_size * sizeof(int));
         int *topk_ids_1 = (int *)malloc(phase2_topk * query_batch_size * sizeof(int));
+        // cudaEvent_t syncEvent;
+        // cudaEventCreate(&syncEvent);
 
         workers[0]->batch_query_search(
             warmup_batch_query,
@@ -177,8 +180,9 @@ int main(int argc, char *argv[])
             candidate_topk_dists_1,
             candidate_topk_ids_1,
             topk_ids_1,
+            // syncEvent,
             false);
-        
+        rerank_task_scheduler_pool.wait();
         rr_pool->wait();
         printf("warm up done\n");
         ///
@@ -186,6 +190,11 @@ int main(int argc, char *argv[])
         /// using multi_worker to process multiple query batches
         half *candidate_topk_dists = (half *)malloc(phase1_topk * query_batch_size * query_batch_num * sizeof(half));
         int *candidate_topk_ids = (int *)malloc(phase1_topk * query_batch_size * query_batch_num * sizeof(int));
+        // cudaEvent_t* syncEvents = new cudaEvent_t[query_batch_num];
+
+        // for (int i = 0; i < query_batch_num; i++) {
+        //     cudaEventCreate(&syncEvents[i]);
+        // }
 
         int *topk_ids = (int *)malloc(phase2_topk * query_batch_size * query_batch_num * sizeof(int));
         std::vector<std::thread> workers_threads;
@@ -202,7 +211,9 @@ int main(int argc, char *argv[])
                 candidate_topk_dists,
                 candidate_topk_ids,
                 topk_ids,
-                query_batch_num);
+                query_batch_num
+                // , syncEvents
+            );
         }
 
         for (auto &&worker_thread : workers_threads)
@@ -217,6 +228,7 @@ int main(int argc, char *argv[])
                (size_t)(query_batch_num * query_batch_size) * 1000 / multi_worker_search_duration_1.count());
 
         // rr_pool.wait();
+        rerank_task_scheduler_pool.wait();
         rr_pool->wait();
         printf("re-rank done\n");
 

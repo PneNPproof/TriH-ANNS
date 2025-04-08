@@ -154,15 +154,14 @@ public:
     cudaStream_t work_stream_
   );
 
-  void batch_query_search
-  (
+  void batch_query_search(
     float *batch_query,
     int batch_query_num,
     half *phase1_distances_h,
     int *phase1_ids_h,
     int *phase2_ids_h,
-    bool verbose
-  );
+    // cudaEvent_t syncEvent, 
+    bool verbose);
 };
 
 /// a search task which executes batch_query_search by one TrihAnnsWorker
@@ -174,5 +173,6 @@ void search_task(
   int *phase1_ids_h,
   int *phase2_ids_h,
   int query_batch_num
-);
+  // , cudaEvent_t* syncEvent
+  );
 ///
