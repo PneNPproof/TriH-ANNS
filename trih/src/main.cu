@@ -29,52 +29,12 @@
 
 using namespace std;
 
-// write a GPU warm up kernel
-__global__ void warmup(int *a, int *b, int *c, int n)
-{
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i < n)
-    {
-        c[i] = a[i] + b[i];
-    }
-}
-
-// write a host func to call the warm up kernel
-void gpu_warmup()
-{
-    int n = 1024;
-    int *a, *b, *c;
-    cudaMalloc(&a, n * sizeof(int));
-    cudaMalloc(&b, n * sizeof(int));
-    cudaMalloc(&c, n * sizeof(int));
-
-    // Call the kernel with appropriate grid and block dimensions
-    int blockSize = 256;
-    int numBlocks = (n + blockSize - 1) / blockSize;
-    warmup<<<numBlocks, blockSize>>>(a, b, c, n);
-
-    // Synchronize to ensure the kernel completes
-    cudaDeviceSynchronize();
-
-    // Free allocated memory
-    cudaFree(a);
-    cudaFree(b);
-    cudaFree(c);
-
-    // Reset any errors
-    cudaGetLastError();
-}
 
 // 全局变量
-sq_info *p_sq_info;
+// sq_info *p_sq_info;
 // BS::thread_pool rr_pool(12);
 BS::thread_pool<>* rr_pool;
-
 int file_ind;
-
-// ThreadPool pool(20);
-// vector<future<int>> results;
-
 atomic<int> query_batch_counter(0);
 
 int main(int argc, char *argv[])
@@ -140,7 +100,7 @@ int main(int argc, char *argv[])
         int reduce_group_num = gdata.train_point_count / reduce_group_size;
 
         rr_pool = new BS::thread_pool<>(rerank_thread_pool_size);
-        file_ind = atoi(argv[11]);
+        // file_ind = atoi(argv[11]);
 
         /// create multi worker
         int num_workers = atoi(argv[8]);
@@ -260,25 +220,6 @@ int main(int argc, char *argv[])
         rr_pool->wait();
         printf("re-rank done\n");
 
-        /// Write phase2_ids_h to binary file for debugging
-        // char fn_phase2[256];
-        // snprintf(fn_phase2, sizeof(fn_phase2), "log/phase2_ids_%d.bin", file_ind);
-        // FILE* fp = fopen(fn_phase2, "wb");
-        // if (fp) {
-        // // Write metadata (number of queries and topk size)
-        // int meta[2] = {query_batch_size, phase2_topk};
-        // fwrite(meta, sizeof(int), 2, fp);
-        
-        // // Write phase2 IDs
-        // fwrite(topk_ids, sizeof(int), query_batch_size * phase2_topk, fp);
-        
-        // fclose(fp);
-        // printf("Phase2 IDs written to %s\n", fn_phase2);
-        // } else {
-        // printf("Failed to open output file for writing phase2 IDs\n");
-        // }
-        ///
-  
         auto multi_worker_search_end = std::chrono::high_resolution_clock::now();
         auto multi_worker_search_duration = std::chrono::duration_cast<std::chrono::milliseconds>(multi_worker_search_end - multi_worker_search_begin);
 
@@ -294,35 +235,6 @@ int main(int argc, char *argv[])
             cudaStreamDestroy(streams[i]);
         }
         ///
-
-
-        // int *topk_ids_2 = (int *)malloc(100 * query_batch_size * sizeof(int));
-
-        // cudaStream_t stream1;
-        // cudaStreamCreate(&stream1);
-        // auto cp_worker = new TrihAnnsWorker(worker, stream1);
-
-        // cp_worker->batch_query_search(
-        //     batch_query,
-        //     query_batch_size,
-        //     topk_ids_1
-        // );
-
-        // cp_worker->batch_query_search(
-        //     gdata.test,
-        //     query_batch_size,
-        //     topk_ids_2
-        // );
-
-        // calculate recall
-        // int *ground_truth_neighbors = (int *)gdata.neighbors;
-        // int *topk_ids = topk_ids_2;
-
-        // cal_recall(
-        //     ground_truth_neighbors,
-        //     topk_ids,
-        //     100,
-        //     query_batch_size);
     }
 
     return 0;
