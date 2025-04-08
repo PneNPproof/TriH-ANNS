@@ -21,6 +21,16 @@ void half_matrix_reduce(
     int seg_num_per_query,
     cudaStream_t stream);
 
+void half_matrix_reduce_v2(
+    const half *dists_per_query,
+    half *reduced_dists_per_query,
+    int *reduced_ids_per_query,
+    int segment_size,
+    int dists_num_per_query,
+    int query_batch_num,
+    int warp_num_per_block,
+    cudaStream_t stream);
+
 cudaError_t segmented_sort_topk_pairs_fp16(
     half *reduced_dists, // [query_num * group_num] in/out - half precision
     int *reduced_inds,   // [query_num * group_num] in/out

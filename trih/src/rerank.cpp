@@ -295,6 +295,7 @@ int re_rank(
     //距离补偿
     // #pragma omp parallel for
     for(int i=0; i<phase1_topk; i++) {
+        // printf("phase1_topk_ids[%d]: %d\n", i, phase1_topk_ids[i]);
         distances[i] = __half2float(phase1_topk_dists[i]) + distance_compensation_sq_precomputing_avx(quant_query, min_q, sum_qq, scale_q, dim - pca_dim, p_sq_info[phase1_topk_ids[i]]);
     }
 

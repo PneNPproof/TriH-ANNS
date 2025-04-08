@@ -97,7 +97,7 @@ int main(int argc, char *argv[])
         int phase2_topk = atoi(argv[6]);
         int rerank_thread_pool_size = atoi(argv[10]);
         int reduce_group_size = atoi(argv[7]);
-        int reduce_group_num = gdata.train_point_count / reduce_group_size;
+        int reduce_group_num = (gdata.train_point_count + (reduce_group_size - 1)) / reduce_group_size;
 
         rr_pool = new BS::thread_pool<>(rerank_thread_pool_size);
         // file_ind = atoi(argv[11]);

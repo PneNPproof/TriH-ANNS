@@ -479,16 +479,31 @@ void TrihAnnsWorker::batch_query_search
   gemm_op(work_stream);
 
   /// reduce half_dists_d into reduced_dists_per_query_d and reduced_ids_per_query_d
-  half_matrix_reduce(
+  // half_matrix_reduce(
+  //   half_dists_d, 
+  //   reduced_dists_per_query_d, 
+  //   reduced_ids_per_query_d, 
+  //   reduce_group_size, 
+  //   reduce_group_num * batch_query_num, 
+  //   reduce_group_num, 
+  //   work_stream
+  // );
+
+  // printf("half_matrix_reduce_v2\n");
+
+  half_matrix_reduce_v2(
     half_dists_d, 
     reduced_dists_per_query_d, 
     reduced_ids_per_query_d, 
     reduce_group_size, 
-    reduce_group_num * batch_query_num, 
-    reduce_group_num, 
+    data_num, 
+    batch_query_num, 
+    32, 
     work_stream
   );
   ///
+
+  // printf("reduced_dists_per_query_d\n");
 
   // printf("segmented_sort_topk_pairs_fp16\n");
   /// extract topk from reduced_dists_per_query_d and reduced_ids_per_query_d
@@ -524,6 +539,8 @@ void TrihAnnsWorker::batch_query_search
     work_stream
   );
 
+  // printf("cub::DeviceSegmentedRadixSort::SortPairs\n");
+
   extract_topk(
     reduced_dists_per_query_d, 
     reduced_ids_per_query_d, 
@@ -536,6 +553,8 @@ void TrihAnnsWorker::batch_query_search
     false
   );
   ///
+
+  // printf("extract_topk\n");
 
   /// copy phase1_distances_d, phase1_ids_d to phase1_distances_h, phase1_ids_h
   cudaMemcpyAsync(phase1_distances_h, phase1_distances_d, batch_query_num * phase1_topk * sizeof(half), cudaMemcpyDeviceToHost, work_stream);
@@ -557,7 +576,7 @@ void TrihAnnsWorker::batch_query_search
   // std::vector<std::future<int>> results;
 
   // rr_pool.get_tasks_queued();
-  // printf("rr_pool get_tasks_queued %d\n", rr_pool.get_tasks_queued());
+  // printf("rr_pool get_tasks_queued %d\n", rr_pool->get_tasks_queued());
   {
     // std::lock_guard<std::mutex> lock(thread_pool_mutex);
     // printf("re-renk task assign\n");

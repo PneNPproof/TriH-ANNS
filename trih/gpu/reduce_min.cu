@@ -9,6 +9,7 @@
 #include <cfloat>
 #include <iostream>
 #include <vector>
+#include <limits>     // Required for std::numeric_limits
 
 #include <cuda_runtime.h>
 #include <cooperative_groups.h>
@@ -172,6 +173,66 @@ __global__ void segmented_argmin_kernel_half(
 }
 
 
+__global__ void segmented_argmin_kernel_half_v2(
+    const half* __restrict__ distances,
+    half* __restrict__ reduced_dists_per_query,
+    int* __restrict__ reduced_ids_per_query,
+    int dists_num_per_query,
+    int segment_size,
+    int segment_num,
+    int seg_num_per_query
+)
+{
+    const int segment_id = blockIdx.x * blockDim.y + threadIdx.y;
+    if (segment_id >= segment_num) return;
+
+    const int local_segment = segment_id % seg_num_per_query;
+    const int query_id = segment_id / seg_num_per_query;
+    const int segment_base_offset_in_query = local_segment * segment_size;
+    const int segment_base_offset_global = query_id * dists_num_per_query + segment_base_offset_in_query;
+    const int real_segment_size = std::min(segment_size, dists_num_per_query - segment_base_offset_in_query);
+
+    // process corresponding segment
+    int VEC_SIZE = (segment_size + 31) / 32;
+    float thread_min_val = INFINITY;
+    int thread_min_idx = -1;
+
+    // #pragma unroll
+    // for (int i = 0; i < segment_size; i += blockDim.x * VEC_SIZE) {
+        // const int load_pos = i + threadIdx.x * VEC_SIZE;
+        const int thread_offset_in_segment = threadIdx.x * VEC_SIZE;
+        // if (thread_offset_in_segment < segment_size) {
+            // Process 4 elements at a time
+            #pragma unroll
+            for (int v = 0; v < VEC_SIZE; ++v) {
+                const int elem_pos_in_segment = thread_offset_in_segment + v;
+                if (elem_pos_in_segment < real_segment_size) {
+                    // Convert half to float for comparison
+                    const float curr_dist = __half2float(distances[segment_base_offset_global + elem_pos_in_segment]);
+                    const int curr_idx = segment_base_offset_in_query + elem_pos_in_segment;
+                    if (curr_dist < thread_min_val) {
+                        thread_min_val = curr_dist;
+                        thread_min_idx = curr_idx;
+                    }
+                }
+                else {
+                    // If we are out of bounds, break the loop
+                    break;
+                }
+            }
+        // }
+    // }
+
+    // Warp reduction - only care about index, but need to track value for comparison
+    warp_reduce_index_only(thread_min_idx, thread_min_val);
+
+    if (threadIdx.x == 0) {
+        reduced_ids_per_query[segment_id] = thread_min_idx;
+        reduced_dists_per_query[segment_id] = __float2half(thread_min_val);
+    }
+}
+
+
 void half_matrix_reduce(
     const half* dists_per_query,
     half* reduced_dists_per_query,
@@ -186,6 +247,27 @@ void half_matrix_reduce(
     dim3 grid((segment_num + block.y - 1) / block.y);
     
     segmented_argmin_kernel_half<<<grid, block, 0, stream>>>(dists_per_query, reduced_dists_per_query, reduced_ids_per_query, segment_size, segment_num, seg_num_per_query);
+}
+
+void half_matrix_reduce_v2(
+    const half* dists_per_query,
+    half* reduced_dists_per_query,
+    int* reduced_ids_per_query,
+    int segment_size,
+    int dists_num_per_query,
+    int query_batch_num,
+    int warp_num_per_block,
+    cudaStream_t stream
+)
+{
+    int segment_num_per_query = (dists_num_per_query + segment_size - 1) / segment_size;
+    int segment_num = query_batch_num * segment_num_per_query;
+
+    dim3 block(32, warp_num_per_block);
+    dim3 grid((segment_num + block.y - 1) / block.y);
+    
+    segmented_argmin_kernel_half_v2<<<grid, block, 0, stream>>>
+    (dists_per_query, reduced_dists_per_query, reduced_ids_per_query, dists_num_per_query, segment_size, segment_num, segment_num_per_query);
 }
 
 cudaError_t segmented_sort_topk_pairs_fp16(
