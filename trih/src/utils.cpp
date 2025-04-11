@@ -87,7 +87,7 @@ void build_index(float *base, int dimension, int size, int &column_num, float &r
 void cal_recall(const int *gt, const int *topk_ids, int topk, int gt_neighbors_per_query, int batch_query_num)
 {
 
-    std::ofstream query_recall_file("log/query_recalls.txt");
+    // std::ofstream query_recall_file("log/query_recalls.txt");
 
     // --- Input Validation ---
     if (gt == nullptr)
@@ -212,13 +212,17 @@ void cal_recall(const int *gt, const int *topk_ids, int topk, int gt_neighbors_p
 
         // Optional: Calculate individual recall and add to sum for strict average
         if (unique_gt_count_for_query > 0) {
-            total_individual_recall_sum += static_cast<double>(current_query_hits) / unique_gt_count_for_query;
+            auto recall_for_query = static_cast<double>(current_query_hits) / unique_gt_count_for_query;
+            // std::cout << "Query " << i << ": Recall = " 
+            //     << recall_for_query << std::endl;
+            // Add to the total for strict average recall
+            total_individual_recall_sum += recall_for_query;
             valid_queries_for_strict_recall++;
         }
 
     } // End loop over queries
 
-    query_recall_file.close();
+    // query_recall_file.close();
 
     // --- Calculate and Print Average Recall ---
 

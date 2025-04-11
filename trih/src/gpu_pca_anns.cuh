@@ -116,14 +116,14 @@ public:
   std::shared_ptr< std::vector<sq_info>> sq_info_h; 
 /// for re-rank
 
-  int data_num;
+  size_t data_num;
   size_t max_queries_num;
-  int dim;
-  int pca_dim;
-  int reduce_group_size;
-  int reduce_group_num;
-  int phase1_topk;
-  int phase2_topk;
+  size_t dim;
+  size_t pca_dim;
+  size_t reduce_group_size;
+  size_t reduce_group_num;
+  size_t phase1_topk;
+  size_t phase2_topk;
 
   cudaStream_t work_stream;
 

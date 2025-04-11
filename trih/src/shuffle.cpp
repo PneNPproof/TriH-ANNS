@@ -1,6 +1,7 @@
 #include <random>
 #include <cstring>
 #include <iostream>
+#include <vector>
 
 void myshuffle(float *vectors, int dim, int size, int *ids) {
     
@@ -48,25 +49,42 @@ void myshuffle(float *vectors, int dim, int size, int *ids) {
 void myshuffle2(float *vectors, int dim, int size, int *others, int others_size) {
     
     int ex;
-
     float vec_tmp[dim];
 
     srand(time(NULL));
 
+    std::vector<int> loc_2_org_loc(size);
+    for(int i=0; i<size; i++) loc_2_org_loc[i] = i;
+    std::vector<int> org_loc_2_loc(size);
+    for(int i=0; i<size; i++) org_loc_2_loc[i] = i;
+
     for(int i=size-1; i>1; i--){
 
         ex = rand() % i; //[0, i-1]
+
+        auto org_loc_1 = loc_2_org_loc[i];
+        auto org_loc_2 = loc_2_org_loc[ex];
+        loc_2_org_loc[i] = org_loc_2;
+        loc_2_org_loc[ex] = org_loc_1;
+        org_loc_2_loc[org_loc_1] = ex;
+        org_loc_2_loc[org_loc_2] = i;
 
         //exchange train point: i <-> ex
         memcpy(vec_tmp, vectors+i*dim, sizeof(float)*dim);
         memcpy(vectors+i*dim, vectors+ex*dim, sizeof(float)*dim);
         memcpy(vectors+ex*dim, vec_tmp, sizeof(float)*dim);
 
-        for(int k=0; k<others_size; k++) {
-            if(others[k] == i) 
-                others[k] = ex;
-            else if(others[k] == ex)
-                others[k] = i;
-        }
+        // for(int k=0; k<others_size; k++) {
+        //     if(others[k] == i) 
+        //         others[k] = ex;
+        //     else if(others[k] == ex)
+        //         others[k] = i;
+        // }
+    }
+
+    #pragma omp parallel for
+    for(int k=0; k<others_size; k++) {
+        auto org_loc = others[k];
+        others[k] = org_loc_2_loc[org_loc];
     }
 }

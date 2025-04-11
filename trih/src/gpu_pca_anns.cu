@@ -25,6 +25,60 @@ extern BS::thread_pool<> *rr_pool;
 
 extern int file_ind;
 
+#define CHECK_CUDA_ERROR(err)                                                                 \
+  do                                                                                          \
+  {                                                                                           \
+    if (err != cudaSuccess)                                                                   \
+    {                                                                                         \
+      fprintf(stderr, "CUDA Error %s:%d: %s\n", __FILE__, __LINE__, cudaGetErrorString(err)); \
+      exit(EXIT_FAILURE);                                                                     \
+    }                                                                                         \
+  } while (0)
+
+// Function to convert cublasStatus_t to string
+const char *cublasGetErrorString(cublasStatus_t status)
+{
+  switch (status)
+  {
+  case CUBLAS_STATUS_SUCCESS:
+    return "CUBLAS_STATUS_SUCCESS";
+  case CUBLAS_STATUS_NOT_INITIALIZED:
+    return "CUBLAS_STATUS_NOT_INITIALIZED";
+  case CUBLAS_STATUS_ALLOC_FAILED:
+    return "CUBLAS_STATUS_ALLOC_FAILED";
+  case CUBLAS_STATUS_INVALID_VALUE:
+    return "CUBLAS_STATUS_INVALID_VALUE";
+  case CUBLAS_STATUS_ARCH_MISMATCH:
+    return "CUBLAS_STATUS_ARCH_MISMATCH";
+  case CUBLAS_STATUS_MAPPING_ERROR:
+    return "CUBLAS_STATUS_MAPPING_ERROR";
+  case CUBLAS_STATUS_EXECUTION_FAILED:
+    return "CUBLAS_STATUS_EXECUTION_FAILED";
+  case CUBLAS_STATUS_INTERNAL_ERROR:
+    return "CUBLAS_STATUS_INTERNAL_ERROR";
+  case CUBLAS_STATUS_NOT_SUPPORTED:
+    return "CUBLAS_STATUS_NOT_SUPPORTED";
+  case CUBLAS_STATUS_LICENSE_ERROR:
+    return "CUBLAS_STATUS_LICENSE_ERROR";
+  // Add more cases as needed based on your cuBLAS version/usage
+  default:
+    return "Unknown cuBLAS error";
+  }
+}
+#define CHECK_CUBLAS(status)                                               \
+  do                                                                       \
+  {                                                                        \
+    cublasStatus_t CUB_err = (status);                                     \
+    if (CUB_err != CUBLAS_STATUS_SUCCESS)                                  \
+    {                                                                      \
+      fprintf(stderr, "cuBLAS error in %s:%d: %s (%d)\n",                  \
+              __FILE__, __LINE__, cublasGetErrorString(CUB_err), CUB_err); \
+      /* You might want to handle the error more gracefully than exit */   \
+      /* For example, return an error code or throw an exception */        \
+      exit(EXIT_FAILURE);                                                  \
+    }                                                                      \
+  } while (0)
+
 // Define a kernel to convert half to float
 __global__ void half_to_float_kernel(half *input, float *output, int size)
 {
@@ -74,10 +128,10 @@ TrihAnnsWorker::TrihAnnsWorker(
   beta = ElementOutput(1);
 
   /// copy to alpha_d, beta_d
-  cudaMalloc(&alpha_d, sizeof(ElementOutput));
-  cudaMalloc(&beta_d, sizeof(ElementOutput));
-  cudaMemcpy(alpha_d, &alpha, sizeof(ElementOutput), cudaMemcpyHostToDevice);
-  cudaMemcpy(beta_d, &beta, sizeof(ElementOutput), cudaMemcpyHostToDevice);
+  CHECK_CUDA_ERROR(cudaMalloc(&alpha_d, sizeof(ElementOutput)));
+  CHECK_CUDA_ERROR(cudaMalloc(&beta_d, sizeof(ElementOutput)));
+  CHECK_CUDA_ERROR(cudaMemcpy(alpha_d, &alpha, sizeof(ElementOutput), cudaMemcpyHostToDevice));
+  CHECK_CUDA_ERROR(cudaMemcpy(beta_d, &beta, sizeof(ElementOutput), cudaMemcpyHostToDevice));
   ///
 
   // quant_queries_h = static_cast<uint8_t*>(aligned_alloc(64, (dim - pca_dim) * max_queries_num_ * sizeof(uint8_t)));
@@ -107,9 +161,9 @@ TrihAnnsWorker::TrihAnnsWorker(
   base_dataset_h = (float *)aligned_alloc(alignment, data_num * dim * sizeof(float));
   pca_dataset_h = (float *)aligned_alloc(alignment, data_num * pca_dim * sizeof(float));
 
-  cudaMemcpy(full_dim_pca_data_h, full_dim_pca_data, dim * dim * sizeof(float), cudaMemcpyHostToHost);
-  cudaMemcpy(base_dataset_h, base_dataset, data_num * dim * sizeof(float), cudaMemcpyHostToHost);
-  cudaMemcpy(pca_dataset_h, pca_dataset, data_num * pca_dim * sizeof(float), cudaMemcpyHostToHost);
+  CHECK_CUDA_ERROR(cudaMemcpy(full_dim_pca_data_h, full_dim_pca_data, dim * dim * sizeof(float), cudaMemcpyHostToHost));
+  CHECK_CUDA_ERROR(cudaMemcpy(base_dataset_h, base_dataset, data_num * dim * sizeof(float), cudaMemcpyHostToHost));
+  CHECK_CUDA_ERROR(cudaMemcpy(pca_dataset_h, pca_dataset, data_num * pca_dim * sizeof(float), cudaMemcpyHostToHost));
 
   /// initialize pca_dim_pca_data_d using full_dim_pca_data_h
   auto pca_dim_pca_data_h = (float *)aligned_alloc(alignment, pca_dim * dim * sizeof(float));
@@ -128,19 +182,21 @@ TrihAnnsWorker::TrihAnnsWorker(
       remain_dim_pca_data_h[i * dim + j] = full_dim_pca_data_h[j * dim + pca_dim + i];
     }
   }
-  cudaMalloc(&pca_dim_pca_data_d, pca_dim * dim * sizeof(float));
-  cudaMemcpy(pca_dim_pca_data_d, pca_dim_pca_data_h, pca_dim * dim * sizeof(float), cudaMemcpyHostToDevice);
-  cudaFreeHost(pca_dim_pca_data_h);
+  CHECK_CUDA_ERROR(cudaMalloc(&pca_dim_pca_data_d, pca_dim * dim * sizeof(float)));
+  CHECK_CUDA_ERROR(cudaMemcpy(pca_dim_pca_data_d, pca_dim_pca_data_h, pca_dim * dim * sizeof(float), cudaMemcpyHostToDevice));
+  // cudaFreeHost(pca_dim_pca_data_h);
+  free(pca_dim_pca_data_h);
 
-  cudaMalloc(&remain_dim_pca_data_d, (dim - pca_dim) * dim * sizeof(float));
-  cudaMemcpy(remain_dim_pca_data_d, remain_dim_pca_data_h, (dim - pca_dim) * dim * sizeof(float), cudaMemcpyHostToDevice);
-  cudaFreeHost(remain_dim_pca_data_h);
+  CHECK_CUDA_ERROR(cudaMalloc(&remain_dim_pca_data_d, (dim - pca_dim) * dim * sizeof(float)));
+  CHECK_CUDA_ERROR(cudaMemcpy(remain_dim_pca_data_d, remain_dim_pca_data_h, (dim - pca_dim) * dim * sizeof(float), cudaMemcpyHostToDevice));
+  // cudaFreeHost(remain_dim_pca_data_h);
+  free(remain_dim_pca_data_h);
   ///
 
   /// transform pca_dim_pca_data_d to half precision
-  cudaMalloc(&half_pca_dim_pca_data_d, pca_dim * dim * sizeof(half));
+  CHECK_CUDA_ERROR(cudaMalloc(&half_pca_dim_pca_data_d, pca_dim * dim * sizeof(half)));
   float_to_half_kernel<<<(pca_dim * dim + 255) / 256, 256, 0, work_stream>>>(pca_dim_pca_data_d, half_pca_dim_pca_data_d, pca_dim * dim);
-  cudaStreamSynchronize(work_stream);
+  CHECK_CUDA_ERROR(cudaStreamSynchronize(work_stream));
   ///
 
   /// calculate squared norms for base_dataset_h
@@ -156,71 +212,71 @@ TrihAnnsWorker::TrihAnnsWorker(
   ///
 
   /// copy full_dim_pca_data_h to gpu
-  cudaMalloc(&full_dim_pca_data_d, dim * dim * sizeof(float));
-  cudaMemcpy(full_dim_pca_data_d, full_dim_pca_data_h, dim * dim * sizeof(float), cudaMemcpyHostToDevice);
+  CHECK_CUDA_ERROR(cudaMalloc(&full_dim_pca_data_d, dim * dim * sizeof(float)));
+  CHECK_CUDA_ERROR(cudaMemcpy(full_dim_pca_data_d, full_dim_pca_data_h, dim * dim * sizeof(float), cudaMemcpyHostToDevice));
   ///
 
   /// allocate memory for batch_query_d, pca_batch_query_d, half_batch_query_d
-  cudaMalloc(&batch_query_d, max_queries_num * dim * sizeof(float));
-  cudaMalloc(&remain_batch_query_d, max_queries_num * (dim - pca_dim) * sizeof(float));
-  cudaMallocHost(&remain_batch_query_h, max_queries_num * (dim - pca_dim) * sizeof(float));
-  cudaMalloc(&pca_batch_query_d, max_queries_num * pca_dim * sizeof(float));
-  cudaMalloc(&half_batch_query_d, max_queries_num * dim * sizeof(half));
+  CHECK_CUDA_ERROR(cudaMalloc(&batch_query_d, max_queries_num * dim * sizeof(float)));
+  CHECK_CUDA_ERROR(cudaMalloc(&remain_batch_query_d, max_queries_num * (dim - pca_dim) * sizeof(float)));
+  CHECK_CUDA_ERROR(cudaMallocHost(&remain_batch_query_h, max_queries_num * (dim - pca_dim) * sizeof(float)));
+  CHECK_CUDA_ERROR(cudaMalloc(&pca_batch_query_d, max_queries_num * pca_dim * sizeof(float)));
+  CHECK_CUDA_ERROR(cudaMalloc(&half_batch_query_d, max_queries_num * dim * sizeof(half)));
   ///
 
   /// Initialize batch_query_d, pca_batch_query_d, half_batch_query_d to zero
-  cudaMemset(batch_query_d, 0, max_queries_num * dim * sizeof(float));
-  cudaMemset(pca_batch_query_d, 0, max_queries_num * pca_dim * sizeof(float));
-  cudaMemset(half_batch_query_d, 0, max_queries_num * dim * sizeof(half));
+  CHECK_CUDA_ERROR(cudaMemset(batch_query_d, 0, max_queries_num * dim * sizeof(float)));
+  CHECK_CUDA_ERROR(cudaMemset(pca_batch_query_d, 0, max_queries_num * pca_dim * sizeof(float)));
+  CHECK_CUDA_ERROR(cudaMemset(half_batch_query_d, 0, max_queries_num * dim * sizeof(half)));
   ///
 
   // printf("flag 11\n");
 
   /// allocate memory for alpha0_d, beta0_d
-  cudaMalloc(&alpha0_d, sizeof(half));
-  cudaMalloc(&beta0_d, sizeof(half));
+  CHECK_CUDA_ERROR(cudaMalloc(&alpha0_d, sizeof(half)));
+  CHECK_CUDA_ERROR(cudaMalloc(&beta0_d, sizeof(half)));
   auto alpha0 = __float2half(1.0f);
   auto beta0 = __float2half(0.0f);
-  cudaMemcpy(alpha0_d, &alpha0, sizeof(half), cudaMemcpyHostToDevice);
-  cudaMemcpy(beta0_d, &beta0, sizeof(half), cudaMemcpyHostToDevice);
+  CHECK_CUDA_ERROR(cudaMemcpy(alpha0_d, &alpha0, sizeof(half), cudaMemcpyHostToDevice));
+  CHECK_CUDA_ERROR(cudaMemcpy(beta0_d, &beta0, sizeof(half), cudaMemcpyHostToDevice));
   ///
 
   /// allocate memory for falpha_d, fbeta_d
-  cudaMalloc(&falpha_d, sizeof(float));
-  cudaMalloc(&fbeta_d, sizeof(float));
+  CHECK_CUDA_ERROR(cudaMalloc(&falpha_d, sizeof(float)));
+  CHECK_CUDA_ERROR(cudaMalloc(&fbeta_d, sizeof(float)));
   auto falpha = 1.0f;
   auto fbeta = 0.0f;
-  cudaMemcpy(falpha_d, &falpha, sizeof(float), cudaMemcpyHostToDevice);
-  cudaMemcpy(fbeta_d, &fbeta, sizeof(float), cudaMemcpyHostToDevice);
+  CHECK_CUDA_ERROR(cudaMemcpy(falpha_d, &falpha, sizeof(float), cudaMemcpyHostToDevice));
+  CHECK_CUDA_ERROR(cudaMemcpy(fbeta_d, &fbeta, sizeof(float), cudaMemcpyHostToDevice));
 
   /// allocate half_dists_d and half_pca_queries_d
-  cudaMalloc(&half_dists_d, data_num * max_queries_num * sizeof(half));
-  cudaMalloc(&half_pca_queries_d, max_queries_num * pca_dim * sizeof(half));
+  CHECK_CUDA_ERROR(cudaMalloc(&half_dists_d, data_num * max_queries_num * sizeof(half)));
+  CHECK_CUDA_ERROR(cudaMalloc(&half_pca_queries_d, max_queries_num * pca_dim * sizeof(half)));
   ///
 
   /// intialize half_dists_d and half_pca_queries_d to zero
-  cudaMemset(half_dists_d, 0, data_num * max_queries_num * sizeof(half));
-  cudaMemset(half_pca_queries_d, 0, max_queries_num * pca_dim * sizeof(half));
+  CHECK_CUDA_ERROR(cudaMemset(half_dists_d, 0, data_num * max_queries_num * sizeof(half)));
+  CHECK_CUDA_ERROR(cudaMemset(half_pca_queries_d, 0, max_queries_num * pca_dim * sizeof(half)));
   ///
 
   /// transform pca_dataset_h, pca_dataset_norms_h to half precision and copy to half_pca_dataset_d, half_pca_dataset_norms_d
-  cudaMalloc(&half_pca_dataset_d, data_num * pca_dim * sizeof(half));
-  cudaMalloc(&half_pca_dataset_norms_d, data_num * max_queries_num * sizeof(half));
+  CHECK_CUDA_ERROR(cudaMalloc(&half_pca_dataset_d, data_num * pca_dim * sizeof(half)));
+  CHECK_CUDA_ERROR(cudaMalloc(&half_pca_dataset_norms_d, data_num * max_queries_num * sizeof(half)));
   half *half_pca_dataset_h, *half_pca_dataset_norms_h;
-  cudaMallocHost(&half_pca_dataset_h, data_num * pca_dim * sizeof(half));
-  cudaMallocHost(&half_pca_dataset_norms_h, data_num * max_queries_num * sizeof(half));
-  for (int i = 0; i < data_num * pca_dim; i++)
+  CHECK_CUDA_ERROR(cudaMallocHost(&half_pca_dataset_h, data_num * pca_dim * sizeof(half)));
+  CHECK_CUDA_ERROR(cudaMallocHost(&half_pca_dataset_norms_h, data_num * max_queries_num * sizeof(half)));
+  for (size_t i = 0; i < data_num * pca_dim; i++)
   {
     half_pca_dataset_h[i] = __float2half(pca_dataset_h[i]);
   }
 
   /// calculate squared norms for pca_dataset_h
   float *pca_dataset_norms_h;
-  cudaMallocHost(&pca_dataset_norms_h, data_num * max_queries_num * sizeof(float));
+  CHECK_CUDA_ERROR(cudaMallocHost(&pca_dataset_norms_h, data_num * max_queries_num * sizeof(float)));
   // printf("flag 2\n");
   // Calculate norms once and replicate across query_num columns
   float *temp_norms;
-  cudaMallocHost(&temp_norms, data_num * sizeof(float));
+  CHECK_CUDA_ERROR(cudaMallocHost(&temp_norms, data_num * sizeof(float)));
 
   // Calculate norms for each data point
   for (int i = 0; i < data_num; i++)
@@ -239,65 +295,65 @@ TrihAnnsWorker::TrihAnnsWorker(
       pca_dataset_norms_h[q * data_num + i] = temp_norms[i];
     }
   }
-  cudaFreeHost(temp_norms);
+  CHECK_CUDA_ERROR(cudaFreeHost(temp_norms));
   ///
 
-  for (int i = 0; i < data_num * max_queries_num; i++)
+  for (size_t i = 0; i < data_num * max_queries_num; i++)
   {
     half_pca_dataset_norms_h[i] = __float2half(pca_dataset_norms_h[i]);
   }
-  cudaMemcpy(half_pca_dataset_d, half_pca_dataset_h, data_num * pca_dim * sizeof(half), cudaMemcpyHostToDevice);
-  cudaMemcpy(half_pca_dataset_norms_d, half_pca_dataset_norms_h, data_num * max_queries_num * sizeof(half), cudaMemcpyHostToDevice);
-  cudaFreeHost(half_pca_dataset_h);
-  cudaFreeHost(half_pca_dataset_norms_h);
-  cudaFreeHost(pca_dataset_norms_h);
+  CHECK_CUDA_ERROR(cudaMemcpy(half_pca_dataset_d, half_pca_dataset_h, data_num * pca_dim * sizeof(half), cudaMemcpyHostToDevice));
+  CHECK_CUDA_ERROR(cudaMemcpy(half_pca_dataset_norms_d, half_pca_dataset_norms_h, data_num * max_queries_num * sizeof(half), cudaMemcpyHostToDevice));
+  CHECK_CUDA_ERROR(cudaFreeHost(half_pca_dataset_h));
+  CHECK_CUDA_ERROR(cudaFreeHost(half_pca_dataset_norms_h));
+  CHECK_CUDA_ERROR(cudaFreeHost(pca_dataset_norms_h));
   ///
 
   /// create cublas handle
-  cublasCreate(&handle);
-  cublasSetStream(handle, work_stream);
-  cublasSetPointerMode(handle, CUBLAS_POINTER_MODE_DEVICE);
+  CHECK_CUBLAS(cublasCreate(&handle));
+  CHECK_CUBLAS(cublasSetStream(handle, work_stream));
+  CHECK_CUBLAS(cublasSetPointerMode(handle, CUBLAS_POINTER_MODE_DEVICE));
   ///
 
   /// allocate memory for reduced_dists_per_query_d, reduced_ids_per_query_d
-  cudaMalloc(&reduced_dists_per_query_d, reduce_group_num * max_queries_num * sizeof(half));
-  cudaMalloc(&reduced_ids_per_query_d, reduce_group_num * max_queries_num * sizeof(int));
+  CHECK_CUDA_ERROR(cudaMalloc(&reduced_dists_per_query_d, reduce_group_num * max_queries_num * sizeof(half)));
+  CHECK_CUDA_ERROR(cudaMalloc(&reduced_ids_per_query_d, reduce_group_num * max_queries_num * sizeof(int)));
   ///
 
   /// intialize reduced_dists_per_query_d, reduced_ids_per_query_d to 0
-  cudaMemset(reduced_dists_per_query_d, 0, reduce_group_num * max_queries_num * sizeof(half));
-  cudaMemset(reduced_ids_per_query_d, 0, reduce_group_num * max_queries_num * sizeof(int));
+  CHECK_CUDA_ERROR(cudaMemset(reduced_dists_per_query_d, 0, reduce_group_num * max_queries_num * sizeof(half)));
+  CHECK_CUDA_ERROR(cudaMemset(reduced_ids_per_query_d, 0, reduce_group_num * max_queries_num * sizeof(int)));
   ///
 
   /// allocate memory for phase1_distances_d, phase1_ids_d
-  cudaMalloc(&phase1_distances_d, max_queries_num * phase1_topk * sizeof(half));
-  cudaMalloc(&phase1_ids_d, max_queries_num * phase1_topk * sizeof(int));
+  CHECK_CUDA_ERROR(cudaMalloc(&phase1_distances_d, max_queries_num * phase1_topk * sizeof(half)));
+  CHECK_CUDA_ERROR(cudaMalloc(&phase1_ids_d, max_queries_num * phase1_topk * sizeof(int)));
   ///
 
   /// initialize phase1_distances_d, phase1_ids_d to 0
-  cudaMemset(phase1_distances_d, 0, max_queries_num * phase1_topk * sizeof(half));
-  cudaMemset(phase1_ids_d, 0, max_queries_num * phase1_topk * sizeof(int));
+  CHECK_CUDA_ERROR(cudaMemset(phase1_distances_d, 0, max_queries_num * phase1_topk * sizeof(half)));
+  CHECK_CUDA_ERROR(cudaMemset(phase1_ids_d, 0, max_queries_num * phase1_topk * sizeof(int)));
   ///
 
   /// initialize segments_offsets_d, temp_storage_d, temp_storage_bytes
   int *segments_offsets_h;
-  cudaMallocHost(&segments_offsets_h, (max_queries_num + 1) * sizeof(int));
+  CHECK_CUDA_ERROR(cudaMallocHost(&segments_offsets_h, (max_queries_num + 1) * sizeof(int)));
   for (int i = 0; i < max_queries_num + 1; i++)
   {
     segments_offsets_h[i] = i * reduce_group_num;
   }
-  cudaMalloc(&segments_offsets_d, (max_queries_num + 1) * sizeof(int));
-  cudaMemcpy(segments_offsets_d, segments_offsets_h, (max_queries_num + 1) * sizeof(int), cudaMemcpyHostToDevice);
+  CHECK_CUDA_ERROR(cudaMalloc(&segments_offsets_d, (max_queries_num + 1) * sizeof(int)));
+  CHECK_CUDA_ERROR(cudaMemcpy(segments_offsets_d, segments_offsets_h, (max_queries_num + 1) * sizeof(int), cudaMemcpyHostToDevice));
 
   temp_storage_bytes = 1024 * 1024 * 1024;
 
   printf("temp_storage_bytes in construction: %d\n", temp_storage_bytes);
 
-  cudaMalloc(&temp_storage_d, temp_storage_bytes);
+  CHECK_CUDA_ERROR(cudaMalloc(&temp_storage_d, temp_storage_bytes));
   ///
 
   /// allocate memory for phase1_distances_h, phase1_ids_h and phase2_ids_h
-  cudaMallocHost(&phase1_distances_h, max_queries_num * phase1_topk * sizeof(half));
+  CHECK_CUDA_ERROR(cudaMallocHost(&phase1_distances_h, max_queries_num * phase1_topk * sizeof(half)));
   // cudaMallocHost(&phase1_ids_h, max_queries_num * phase1_topk * sizeof(int));
   // cudaMallocHost(&phase2_ids_h, max_queries_num * phase2_topk * sizeof(int));
   ///
@@ -419,7 +475,7 @@ void TrihAnnsWorker::batch_query_search(
     half *phase1_distances_h,
     int *phase1_ids_h,
     int *phase2_ids_h,
-    // cudaEvent_t syncEvent, 
+    // cudaEvent_t syncEvent,
     bool verbose)
 {
   // auto start_time = std::chrono::high_resolution_clock::now();
@@ -475,6 +531,8 @@ void TrihAnnsWorker::batch_query_search(
       CUDA_R_32F,
       CUBLAS_GEMM_DEFAULT_TENSOR_OP);
 
+  // printf("flag 1\n");
+
   cutlass::gemm::GemmCoord problem_size(data_num, batch_query_num, pca_dim);
 
   int split_k_slices = 1;
@@ -489,6 +547,8 @@ void TrihAnnsWorker::batch_query_search(
   cutlass::TensorRef<cutlass::half_t, cutlass::layout::ColumnMajor> tensor_C(reinterpret_cast<cutlass::half_t *>(half_pca_dataset_norms_d), tensor_C_layout);
   cutlass::TensorRef<cutlass::half_t, cutlass::layout::ColumnMajor> tensor_D(reinterpret_cast<cutlass::half_t *>(half_dists_d), tensor_D_layout);
 
+  // printf("flag 2\n");
+
   typename Gemm::Arguments arguments{
       problem_size,
       tensor_A,
@@ -499,9 +559,58 @@ void TrihAnnsWorker::batch_query_search(
       // {*alpha_d, *beta_d},
       split_k_slices};
 
+  // printf("flag 3\n");
+
   gemm_op.initialize(arguments, gemm_workspace.get(), work_stream);
 
+  // cudaStreamSynchronize(work_stream);
+  // printf("flag 4\n");
+
   gemm_op(work_stream);
+
+  // cudaStreamSynchronize(work_stream);
+
+  // Debug: write 1000 distance results to a file for each query
+  // if (batch_query_num > 0) {
+  //   // Allocate host memory to store distances
+  //   half* debug_dists_h = nullptr;
+  //   const int debug_count = std::min((size_t)100, data_num);
+  //   cudaMallocHost(&debug_dists_h, batch_query_num * debug_count * sizeof(half));
+
+  //   // Copy a subset of distances from device to host
+  //   for (int q = 0; q < batch_query_num; q++) {
+  //     cudaMemcpyAsync(
+  //         debug_dists_h + q * debug_count,
+  //         half_dists_d + q * data_num + 2340268,
+  //         debug_count * sizeof(half),
+  //         cudaMemcpyDeviceToHost,
+  //         work_stream);
+  //   }
+
+  //   cudaStreamSynchronize(work_stream);
+
+  //   // Write to file
+  //   char filename[100];
+  //   sprintf(filename, "log/dists_debug_%d.txt", file_ind++);
+  //   FILE* fp = fopen(filename, "w");
+  //   if (fp) {
+  //     for (int q = 0; q < batch_query_num; q++) {
+  //       fprintf(fp, "Query %d distances:\n", q);
+  //       for (int i = 0; i < debug_count; i++) {
+  //         fprintf(fp, "%.6f ", __half2float(debug_dists_h[q * debug_count + i]));
+  //         if ((i + 1) % 4 == 0) fprintf(fp, "\n");
+  //       }
+  //       fprintf(fp, "\n\n");
+  //     }
+  //     fclose(fp);
+  //   }
+
+  //   // Free allocated memory
+  //   cudaFreeHost(debug_dists_h);
+  // }
+
+  // cudaStreamSynchronize(work_stream);
+  // printf("flag 5\n");
 
   /// reduce half_dists_d into reduced_dists_per_query_d and reduced_ids_per_query_d
   // half_matrix_reduce(
@@ -523,9 +632,46 @@ void TrihAnnsWorker::batch_query_search(
       reduce_group_size,
       data_num,
       batch_query_num,
-      32,
+      8,
       work_stream);
   ///
+
+  // Debug: write reduced distances and IDs to a file
+  // cudaStreamSynchronize(work_stream);
+  // half *debug_reduced_dists_h = nullptr;
+  // int *debug_reduced_ids_h = nullptr;
+  // const int total_elements = reduce_group_num * batch_query_num;
+  // cudaMallocHost(&debug_reduced_dists_h, total_elements * sizeof(half));
+  // cudaMallocHost(&debug_reduced_ids_h, total_elements * sizeof(int));
+
+  // // Copy data from device to host
+  // cudaMemcpyAsync(debug_reduced_dists_h, reduced_dists_per_query_d,
+  //                 total_elements * sizeof(half), cudaMemcpyDeviceToHost, work_stream);
+  // cudaMemcpyAsync(debug_reduced_ids_h, reduced_ids_per_query_d,
+  //                 total_elements * sizeof(int), cudaMemcpyDeviceToHost, work_stream);
+  // cudaStreamSynchronize(work_stream);
+
+  // // Write to file
+  // FILE *fp = fopen("log/reduced_data_debug2.txt", "a");
+  // if (fp)
+  // {
+  //   fprintf(fp, "Query\tGroup\tID\tDistance\n");
+  //   for (int q = 0; q < batch_query_num; q++)
+  //   {
+  //     for (int g = 0; g < reduce_group_num; g++)
+  //     {
+  //       int idx = q * reduce_group_num + g;
+  //       fprintf(fp, "%d\t%d\t%d\t%.6f\n",
+  //               q, g, debug_reduced_ids_h[idx], __half2float(debug_reduced_dists_h[idx]));
+  //     }
+  //     fprintf(fp, "\n");
+  //   }
+  //   fclose(fp);
+  // }
+
+  // // Free allocated memory
+  // cudaFreeHost(debug_reduced_dists_h);
+  // cudaFreeHost(debug_reduced_ids_h);
 
   // printf("reduced_dists_per_query_d\n");
 
@@ -596,11 +742,11 @@ void TrihAnnsWorker::batch_query_search(
   // auto start_time = std::chrono::high_resolution_clock::now();
   // Record syncEvent for task synchronization
   // cudaEventRecord(syncEvent, work_stream);
-  
+
   // End timing
   // auto end_time = std::chrono::high_resolution_clock::now();
   // auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count();
-  
+
   // if (verbose) {
   //   printf("GPU operations time: %.3f ms\n", static_cast<float>(duration));
   // }
@@ -618,8 +764,6 @@ void TrihAnnsWorker::batch_query_search(
   //           phase2_ids_h);
   //     });
 
-
-
   // auto end_time = std::chrono::high_resolution_clock::now();
   // auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time).count();
   // printf("batch_query_search gpu execution time: %.3f us\n", static_cast<float>(duration));
@@ -628,28 +772,26 @@ void TrihAnnsWorker::batch_query_search(
   /// assign rerank tasks
   // std::vector<std::future<int>> results;
 
-  
   {
     // std::lock_guard<std::mutex> lock(thread_pool_mutex);
     // printf("re-renk task assign\n");
     for (int i = 0; i < batch_query_num; i++)
     {
       // rr_pool->detach_task(
-      //   [this, batch_query, i, phase1_ids_h, phase2_ids_h]{
-      //     re_rank2(
-      //       this->base_dataset_h,
-      //       this->base_dataset_norms_h,
-      //       batch_query + i * this->dim,
-      //       // this->phase1_ids_h + i * this->phase1_topk,
-      //       phase1_ids_h + i * this->phase1_topk,
-      //       this->phase1_topk,
-      //       this->data_num,
-      //       this->dim,
-      //       this->phase2_topk,
-      //       phase2_ids_h + i * this->phase2_topk
-      //     );
-      //   }
-      // );
+      //     [this, batch_query, i, phase1_ids_h, phase2_ids_h]
+      //     {
+      //       re_rank2(
+      //           this->base_dataset_h,
+      //           this->base_dataset_norms_h,
+      //           batch_query + i * this->dim,
+      //           // this->phase1_ids_h + i * this->phase1_topk,
+      //           phase1_ids_h + i * this->phase1_topk,
+      //           this->phase1_topk,
+      //           this->data_num,
+      //           this->dim,
+      //           this->phase2_topk,
+      //           phase2_ids_h + i * this->phase2_topk);
+      //     });
 
       rr_pool->detach_task(
           [this, batch_query, i, phase1_distances_h, phase1_ids_h, phase2_ids_h]
@@ -685,7 +827,7 @@ void search_task(
     int *phase2_ids_h,
     int query_batch_num
     // , cudaEvent_t* syncEvent
-  )
+)
 {
   // repeatly call batch_query_search until all queries are processed
   while (true)

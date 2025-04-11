@@ -25,9 +25,9 @@ void half_matrix_reduce_v2(
     const half *dists_per_query,
     half *reduced_dists_per_query,
     int *reduced_ids_per_query,
-    int segment_size,
-    int dists_num_per_query,
-    int query_batch_num,
+    size_t segment_size,
+    size_t dists_num_per_query,
+    size_t query_batch_num,
     int warp_num_per_block,
     cudaStream_t stream);
 

@@ -177,10 +177,10 @@ __global__ void segmented_argmin_kernel_half_v2(
     const half* __restrict__ distances,
     half* __restrict__ reduced_dists_per_query,
     int* __restrict__ reduced_ids_per_query,
-    int dists_num_per_query,
-    int segment_size,
-    int segment_num,
-    int seg_num_per_query
+    size_t dists_num_per_query,
+    size_t segment_size,
+    size_t segment_num,
+    size_t seg_num_per_query
 )
 {
     const int segment_id = blockIdx.x * blockDim.y + threadIdx.y;
@@ -189,7 +189,7 @@ __global__ void segmented_argmin_kernel_half_v2(
     const int local_segment = segment_id % seg_num_per_query;
     const int query_id = segment_id / seg_num_per_query;
     const int segment_base_offset_in_query = local_segment * segment_size;
-    const int segment_base_offset_global = query_id * dists_num_per_query + segment_base_offset_in_query;
+    const size_t segment_base_offset_global = query_id * dists_num_per_query + segment_base_offset_in_query;
     const int real_segment_size = std::min(segment_size, dists_num_per_query - segment_base_offset_in_query);
 
     // process corresponding segment
@@ -253,9 +253,9 @@ void half_matrix_reduce_v2(
     const half* dists_per_query,
     half* reduced_dists_per_query,
     int* reduced_ids_per_query,
-    int segment_size,
-    int dists_num_per_query,
-    int query_batch_num,
+    size_t segment_size,
+    size_t dists_num_per_query,
+    size_t query_batch_num,
     int warp_num_per_block,
     cudaStream_t stream
 )

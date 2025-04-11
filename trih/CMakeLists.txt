@@ -15,37 +15,37 @@ set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/lib)
 set(CMAKE_CUDA_STANDARD 17)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CUDA_SEPARABLE_COMPILATION ON)
-# set(CMAKE_CUDA_RUNTIME_LIBRARY Static)
 
 find_package(OpenMP REQUIRED)
 
-# set(CMAKE_CUDA_FLAGS_RELWITHDEBINFO "${CMAKE_CUDA_FLAGS_RELWITHDEBINFO} -lineinfo")
-
-add_compile_options(
-  "$<$<COMPILE_LANGUAGE:CUDA>:--use_fast_math>"
-  "$<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=-Wno-deprecated-declarations>"
-)
-
 add_compile_options(
   "$<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr>"
+  "$<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=-Wno-deprecated-declarations>"
 )
 
 add_compile_options(
     "$<$<COMPILE_LANGUAGE:CXX>:-march=native>"
     "$<$<COMPILE_LANGUAGE:CXX>:-mtune=native>"
-    # "$<$<COMPILE_LANGUAGE:CXX>:-flto>"
     "$<$<COMPILE_LANGUAGE:CXX>:-mavx512f>"
-    "$<$<COMPILE_LANGUAGE:CXX>:-ffast-math>"
-    "$<$<COMPILE_LANGUAGE:CXX>:-funroll-loops>"
 )
 
-add_compile_options(
-    "$<$<COMPILE_LANGUAGE:CXX>:-O3>"
-    "$<$<COMPILE_LANGUAGE:CUDA>:-O3>"
-    # "$<$<COMPILE_LANGUAGE:CUDA>:-Xptxas=-O3,-v>"
-    "$<$<COMPILE_LANGUAGE:CUDA>:-Xptxas=-O3>"
-)
-# set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -flto")
+
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+    set(CMAKE_CUDA_FLAGS_DEBUG "${CMAKE_CUDA_FLAGS_DEBUG} -g -G")
+endif()
+
+if(CMAKE_BUILD_TYPE STREQUAL "Release")
+    add_compile_options(
+        "$<$<COMPILE_LANGUAGE:CXX>:-ffast-math>"
+        "$<$<COMPILE_LANGUAGE:CXX>:-funroll-loops>"
+    )
+    add_compile_options(
+        "$<$<COMPILE_LANGUAGE:CUDA>:--use_fast_math>"
+        "$<$<COMPILE_LANGUAGE:CXX>:-O3>"
+        "$<$<COMPILE_LANGUAGE:CUDA>:-O3>"
+        "$<$<COMPILE_LANGUAGE:CUDA>:-Xptxas=-O3>"
+    )
+endif()
 
 link_directories("/usr/lib/x86_64-linux-gnu/hdf5/serial")
 

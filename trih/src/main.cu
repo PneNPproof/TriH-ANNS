@@ -24,25 +24,26 @@
 
 #include "gpu_pca_anns.cuh"
 
-#define SECTION_NUM 8000
-#define TOP_K 300
+// #define SECTION_NUM 8000
+// #define TOP_K 300
 
 using namespace std;
 
 
 // 全局变量
-// sq_info *p_sq_info;
 // BS::thread_pool rr_pool(12);
 BS::thread_pool<>* rr_pool;
 // BS::thread_pool rerank_task_scheduler_pool(4);
-int file_ind;
+int file_ind = 2;
 atomic<int> query_batch_counter(0);
 
 int main(int argc, char *argv[])
 {
 
-    const char *data_dir = "/home/yshen/ann-benchmarks/data";
-    const char *index_dir = "/home/wangzhe/TriH-ANNS/index"; //"/home/yshen/PCA/pca_index_pca_sq/build";
+    // const char *data_dir = "/home/yshen/ann-benchmarks/data";
+    // const char *index_dir = "/home/wangzhe/TriH-ANNS/index";
+    const char *data_dir = "/paper_experiment/data";
+    const char *index_dir = "/paper_experiment/index";
 
     char filename[100];
 
@@ -85,6 +86,13 @@ int main(int argc, char *argv[])
 
         pca_index index;
         load_pca_index(ifs, index);
+
+        /// Make gdata.train_point_count and index.record_num a multiple of 4.
+        auto residual = gdata.train_point_count % 8;
+        gdata.train_point_count -= residual;
+        index.record_num -= residual;
+        ///
+
         std::cout << "\tindex " << ": " << std::endl;
         std::cout << "\tdim=" << index.dim << std::endl;
         std::cout << "\trecord_num=" << index.record_num << std::endl;
@@ -101,7 +109,7 @@ int main(int argc, char *argv[])
         int reduce_group_num = (gdata.train_point_count + (reduce_group_size - 1)) / reduce_group_size;
 
         rr_pool = new BS::thread_pool<>(rerank_thread_pool_size);
-        // file_ind = atoi(argv[11]);
+        file_ind = atoi(argv[11]);
 
         /// create multi worker
         int num_workers = atoi(argv[8]);
@@ -182,7 +190,7 @@ int main(int argc, char *argv[])
             topk_ids_1,
             // syncEvent,
             false);
-        rerank_task_scheduler_pool.wait();
+        // rerank_task_scheduler_pool.wait();
         rr_pool->wait();
         printf("warm up done\n");
         ///
@@ -228,7 +236,7 @@ int main(int argc, char *argv[])
                (size_t)(query_batch_num * query_batch_size) * 1000 / multi_worker_search_duration_1.count());
 
         // rr_pool.wait();
-        rerank_task_scheduler_pool.wait();
+        // rerank_task_scheduler_pool.wait();
         rr_pool->wait();
         printf("re-rank done\n");
 
