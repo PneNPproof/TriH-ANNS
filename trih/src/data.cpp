@@ -136,11 +136,13 @@ data load_data(const char *filename) {
     else
         d = load_vecs(filename);
     
+    #ifdef DETAILED_LOG
     std::cout << "\tData info: " << std::endl;
     std::cout << "\tdim: " << d.dim << std::endl;
     std::cout << "\ttrain: " << d.train_point_count << std::endl;
     std::cout << "\ttest: " << d.test_point_count << std::endl;
     std::cout << "\tneigbors per test: " << d.neighbors_per_test << std::endl;
+    #endif
 
     return d;
 }

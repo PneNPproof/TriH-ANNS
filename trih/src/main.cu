@@ -47,7 +47,10 @@ int main(int argc, char *argv[])
 
     char filename[100];
 
+    #ifdef DETAILED_LOG
     std::cout << "Loading data ..." << std::endl;
+    #endif
+
     trih::data gdata;
     sprintf(filename, "%s/%s", data_dir, argv[1]);
     gdata = trih::load_data(filename);
@@ -75,7 +78,9 @@ int main(int argc, char *argv[])
     else if (argv[2][0] == 's')
     { // search,  command: ./pca data_filename s index_tag query_batch_size phase1_topk phase2_topk reduce_group_size num_workers batch_num_per_worker rerank_thread_pool_size
 
+        #ifdef DETAILED_LOG
         std::cout << "Loading index ..." << std::endl;
+        #endif
 
         ifstream ifs(filename, std::ios::binary);
 
@@ -92,11 +97,13 @@ int main(int argc, char *argv[])
         index.record_num -= residual;
         ///
 
+        #ifdef DETAILED_LOG
         std::cout << "\tindex " << ": " << std::endl;
         std::cout << "\tdim=" << index.dim << std::endl;
         std::cout << "\trecord_num=" << index.record_num << std::endl;
         std::cout << "\tcolumn_num=" << index.column_num << std::endl;
         std::cout << "\tratio=" << index.ratio << std::endl;
+        #endif
 
         ifs.close();
 
@@ -138,14 +145,18 @@ int main(int argc, char *argv[])
             rerank_thread_pool_size);
         workers[0] = &worker;
         
+        #ifdef DETAILED_LOG
         printf("create first worker done\n");
+        #endif
 
         for (int i = 1; i < num_workers; i++)
         {
             workers[i] = new TrihAnnsWorker(worker, streams[i]);
         }
 
+        #ifdef DETAILED_LOG
         printf("create workers done\n");
+        #endif
         ///
 
         /// prepare query batch
@@ -164,8 +175,10 @@ int main(int argc, char *argv[])
             batch_num_per_worker,
             batch_query,
             batch_query_groundtruth);
-
+        
+        #ifdef DETAILED_LOG
         printf("prepare query batch done\n");
+        #endif
         ///
 
         /// randomly generate batch_query for warm up and do warm up
@@ -191,7 +204,10 @@ int main(int argc, char *argv[])
             false);
         // rerank_task_scheduler_pool.wait();
         rr_pool->wait();
+
+        #ifdef DETAILED_LOG
         printf("warm up done\n");
+        #endif
         ///
 
         /// using multi_worker to process multiple query batches
@@ -230,20 +246,29 @@ int main(int argc, char *argv[])
 
         auto multi_worker_search_end_1 = std::chrono::high_resolution_clock::now();
         auto multi_worker_search_duration_1 = std::chrono::duration_cast<std::chrono::milliseconds>(multi_worker_search_end_1 - multi_worker_search_begin);
+
+        #ifdef DETAILED_LOG
         printf("multi worker gpu calculation done, duration = %lld ms, qps = %zu, wait for re-rank\n", 
                multi_worker_search_duration_1.count(), 
                (size_t)(query_batch_num * query_batch_size) * 1000 / multi_worker_search_duration_1.count());
+        #endif
 
-        // rr_pool.wait();
-        // rerank_task_scheduler_pool.wait();
         rr_pool->wait();
+
+        #ifdef DETAILED_LOG
         printf("re-rank done\n");
+        #endif
 
         auto multi_worker_search_end = std::chrono::high_resolution_clock::now();
         auto multi_worker_search_duration = std::chrono::duration_cast<std::chrono::milliseconds>(multi_worker_search_end - multi_worker_search_begin);
 
         size_t qps = (size_t)(query_batch_num * query_batch_size) * 1000 / multi_worker_search_duration.count();
+
+        #ifdef DETAILED_LOG
         printf("multi worker search done, qps = %zu\n", qps);
+        #endif
+
+        printf("qps = %zu\n", qps);
 
         trih::cal_recall(batch_query_groundtruth, topk_ids, phase2_topk, gdata.neighbors_per_test, query_batch_num * query_batch_size);
         ///

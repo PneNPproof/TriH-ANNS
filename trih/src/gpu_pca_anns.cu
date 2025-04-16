@@ -347,7 +347,9 @@ TrihAnnsWorker::TrihAnnsWorker(
 
   temp_storage_bytes = 1024 * 1024 * 1024;
 
+  #ifdef DETAILED_LOG
   printf("temp_storage_bytes in construction: %d\n", temp_storage_bytes);
+  #endif
 
   CHECK_CUDA_ERROR(cudaMalloc(&temp_storage_d, temp_storage_bytes));
   ///

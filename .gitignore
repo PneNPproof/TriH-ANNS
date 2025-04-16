@@ -46,6 +46,7 @@ raft_install/
 
 examples/
 test/
+anns_results/
 library/
 profiler/
 

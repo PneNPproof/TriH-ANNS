@@ -244,7 +244,12 @@ void cal_recall(const int *gt, const int *topk_ids, int topk, int gt_neighbors_p
     std::cout << std::fixed << std::setprecision(6); // Set output precision
     // std::cout << "Average Recall@" << topk << ": " << average_recall << std::endl;
     // If using the strict definition:
+
+    #ifdef DETAILED_LOG
     std::cout << "Strict Average Recall@" << topk << ": " << strict_average_recall << std::endl;
+    #endif
+
+    std::cout << "recall@" << topk << ": " << average_recall << std::endl;
 
 }
 
