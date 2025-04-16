@@ -42,7 +42,7 @@ int main(int argc, char *argv[])
 
     // const char *data_dir = "/home/yshen/ann-benchmarks/data";
     // const char *index_dir = "/home/wangzhe/TriH-ANNS/index";
-    const char *data_dir = "/paper_experiment/data";
+    const char *data_dir = "/Trih/dataset/dataset_shuffle";
     const char *index_dir = "/paper_experiment/index";
 
     char filename[100];
@@ -65,10 +65,9 @@ int main(int argc, char *argv[])
         ofstream ofs(filename, std::ios::binary);
 
         // 对数据进行shuffle
-        myshuffle2(gdata.train, gdata.dim, gdata.train_point_count, (int *)gdata.neighbors, gdata.test_point_count * gdata.neighbors_per_test);
-
-        sprintf(filename, "%s/shuffled_%s.bin", index_dir, index_tag);
-        save_shuffled_data(filename, gdata);
+        // myshuffle2(gdata.train, gdata.dim, gdata.train_point_count, (int *)gdata.neighbors, gdata.test_point_count * gdata.neighbors_per_test);
+        // sprintf(filename, "%s/shuffled_%s.bin", index_dir, index_tag);
+        // save_shuffled_data(filename, gdata);
 
         trih::build_index(gdata.train, gdata.dim, gdata.train_point_count, column_num, ratio, ofs);
         ofs.close();
@@ -81,8 +80,8 @@ int main(int argc, char *argv[])
         ifstream ifs(filename, std::ios::binary);
 
         // load shuffled data, 在load 数据的基础上，替换
-        sprintf(filename, "%s/shuffled_%s.bin", index_dir, index_tag);
-        load_shuffled_data(filename, gdata);
+        // sprintf(filename, "%s/shuffled_%s.bin", index_dir, index_tag);
+        // load_shuffled_data(filename, gdata);
 
         pca_index index;
         load_pca_index(ifs, index);
@@ -109,7 +108,7 @@ int main(int argc, char *argv[])
         int reduce_group_num = (gdata.train_point_count + (reduce_group_size - 1)) / reduce_group_size;
 
         rr_pool = new BS::thread_pool<>(rerank_thread_pool_size);
-        file_ind = atoi(argv[11]);
+        // file_ind = atoi(argv[11]);
 
         /// create multi worker
         int num_workers = atoi(argv[8]);
