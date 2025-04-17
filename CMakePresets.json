@@ -16,7 +16,8 @@
         "CMAKE_INSTALL_PREFIX": "${sourceDir}/install",
         "CMAKE_BUILD_TYPE": "Release",
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
-        "CMAKE_VERBOSE_MAKEFILE": "ON"
+        "CMAKE_VERBOSE_MAKEFILE": "ON",
+        "ENABLE_DETAILED_LOG": "ON"
       }
     }
   ],

@@ -71,6 +71,14 @@ target_include_directories(${TARGET_NAME} PRIVATE
     # /usr/include
 )
 
+# Conditionally add the compile definition to your target
+if(ENABLE_DETAILED_LOG)
+    target_compile_definitions(${TARGET_NAME} PRIVATE DETAILED_LOG)
+    message(STATUS "Detailed logging enabled.")
+else()
+    message(STATUS "Detailed logging disabled.")
+endif()
+
 # target_compile_options(${TARGET_NAME} PRIVATE
 #   "$<$<COMPILE_LANGUAGE:CUDA>:-Xptxas=-dlcm=ca>"  # 缓存控制
 #   "$<$<COMPILE_LANGUAGE:CUDA>:-Xptxas=-dscm=cs>"   # 共享内存配置
@@ -94,6 +102,8 @@ target_link_libraries(${TARGET_NAME} PRIVATE
 )
 
 target_link_libraries(${TARGET_NAME} PRIVATE OpenMP::OpenMP_CXX)
+
+
 
 # set_target_properties(${TARGET_NAME} PROPERTIES
 #     LINK_SEARCH_START_STATIC 1
