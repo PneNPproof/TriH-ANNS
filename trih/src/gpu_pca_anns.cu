@@ -206,6 +206,8 @@ TrihAnnsWorker::TrihAnnsWorker(
 
   /// calculate squared norms for base_dataset_h
   base_dataset_norms_h = (float *)aligned_alloc(alignment, data_num * sizeof(float));
+
+  #pragma omp parallel for
   for (int i = 0; i < data_num; i++)
   {
     base_dataset_norms_h[i] = 0;
@@ -270,6 +272,8 @@ TrihAnnsWorker::TrihAnnsWorker(
   half *half_pca_dataset_h, *half_pca_dataset_norms_h;
   CHECK_CUDA_ERROR(cudaMallocHost(&half_pca_dataset_h, data_num * pca_dim * sizeof(half)));
   CHECK_CUDA_ERROR(cudaMallocHost(&half_pca_dataset_norms_h, data_num * max_queries_num * sizeof(half)));
+
+  #pragma omp parallel for
   for (size_t i = 0; i < data_num * pca_dim; i++)
   {
     half_pca_dataset_h[i] = __float2half(pca_dataset_h[i]);
@@ -284,6 +288,7 @@ TrihAnnsWorker::TrihAnnsWorker(
   CHECK_CUDA_ERROR(cudaMallocHost(&temp_norms, data_num * sizeof(float)));
 
   // Calculate norms for each data point
+  #pragma omp parallel for
   for (int i = 0; i < data_num; i++)
   {
     temp_norms[i] = 0;
@@ -293,6 +298,8 @@ TrihAnnsWorker::TrihAnnsWorker(
       // temp_norms[i] += pca_dataset_h[i * pca_dim + j] * pca_dataset_h[i * pca_dim + j];
     }
   }
+
+  #pragma omp parallel for
   for (int q = 0; q < max_queries_num; q++)
   {
     for (int i = 0; i < data_num; i++)
@@ -303,6 +310,7 @@ TrihAnnsWorker::TrihAnnsWorker(
   CHECK_CUDA_ERROR(cudaFreeHost(temp_norms));
   ///
 
+  #pragma omp parallel for
   for (size_t i = 0; i < data_num * max_queries_num; i++)
   {
     half_pca_dataset_norms_h[i] = __float2half(pca_dataset_norms_h[i]);

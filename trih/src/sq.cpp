@@ -49,6 +49,7 @@ void gen_sq_info(float *data, int dim, int bits, int size, sq_info *p_info, int 
         return;
     }
 
+    #pragma omp parallel for
     for(int i=0; i<size; i++) {
 
         x = data + i*dim;
