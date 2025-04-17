@@ -116,6 +116,9 @@ TrihAnnsWorker::TrihAnnsWorker(
     int phase2_topk_,
     cudaStream_t work_stream_,
     int re_rank_thread_pool_size_) : gemm_workspace(1024 * 1024 * 1024),
+                                     full_dim_pca_data_h(full_dim_pca_data),
+                                     base_dataset_h(base_dataset),
+                                     pca_dataset_h(pca_dataset),
                                      data_num(data_num_),
                                      max_queries_num(max_queries_num_),
                                      dim(dim_),
@@ -159,13 +162,13 @@ TrihAnnsWorker::TrihAnnsWorker(
       -1);
 
   constexpr size_t alignment = 64;
-  full_dim_pca_data_h = (float *)aligned_alloc(alignment, dim * dim * sizeof(float));
-  base_dataset_h = (float *)aligned_alloc(alignment, data_num * dim * sizeof(float));
-  pca_dataset_h = (float *)aligned_alloc(alignment, data_num * pca_dim * sizeof(float));
+  // full_dim_pca_data_h = (float *)aligned_alloc(alignment, dim * dim * sizeof(float));
+  // base_dataset_h = (float *)aligned_alloc(alignment, data_num * dim * sizeof(float));
+  // pca_dataset_h = (float *)aligned_alloc(alignment, data_num * pca_dim * sizeof(float));
 
-  CHECK_CUDA_ERROR(cudaMemcpy(full_dim_pca_data_h, full_dim_pca_data, dim * dim * sizeof(float), cudaMemcpyHostToHost));
-  CHECK_CUDA_ERROR(cudaMemcpy(base_dataset_h, base_dataset, data_num * dim * sizeof(float), cudaMemcpyHostToHost));
-  CHECK_CUDA_ERROR(cudaMemcpy(pca_dataset_h, pca_dataset, data_num * pca_dim * sizeof(float), cudaMemcpyHostToHost));
+  // CHECK_CUDA_ERROR(cudaMemcpy(full_dim_pca_data_h, full_dim_pca_data, dim * dim * sizeof(float), cudaMemcpyHostToHost));
+  // CHECK_CUDA_ERROR(cudaMemcpy(base_dataset_h, base_dataset, data_num * dim * sizeof(float), cudaMemcpyHostToHost));
+  // CHECK_CUDA_ERROR(cudaMemcpy(pca_dataset_h, pca_dataset, data_num * pca_dim * sizeof(float), cudaMemcpyHostToHost));
 
   /// initialize pca_dim_pca_data_d using full_dim_pca_data_h
   auto pca_dim_pca_data_h = (float *)aligned_alloc(alignment, pca_dim * dim * sizeof(float));

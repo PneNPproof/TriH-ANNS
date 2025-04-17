@@ -24,7 +24,8 @@ data load_h5(const char *filename)
 
     d.dim = dims[1];
     d.train_point_count = dims[0];
-    d.train = new float[dims[0]*dims[1]];
+    // d.train = new float[dims[0]*dims[1]];
+    d.train = (float *)aligned_alloc(64, dims[0]*dims[1]*sizeof(float));
     H5Dread(dataset_id, H5T_NATIVE_FLOAT, H5S_ALL, H5S_ALL, H5P_DEFAULT, d.train);
     H5Sclose(dataspace_id);
     H5Dclose(dataset_id);
