@@ -780,7 +780,7 @@ void TrihAnnsWorker::batch_query_search(
   /// assign rerank tasks
   // std::vector<std::future<int>> results;
 
-  std::cout << "there are " << rr_pool->get_tasks_queued() << " in pool" << std::endl;
+  // std::cout << "there are " << rr_pool->get_tasks_queued() << " in pool" << std::endl;
   {
     // std::lock_guard<std::mutex> lock(thread_pool_mutex);
     // printf("re-renk task assign\n");
