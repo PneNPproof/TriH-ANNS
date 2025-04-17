@@ -41,3 +41,6 @@ for (int i=0; i<batch_query_num; i++)
     }
 ```
 To ensure that a worker can be immediately available for the next batch of queries after submitting a rerank task, it is necessary to guarantee that the previous rerank task no longer depends on a certain data structure of the worker. Here, an obvious dependency is `phase1_ids_h`, as the next batch of queries might modify the content of this structure, causing issues in the rerank process of the previous batch.
+
+#### quant_queries_h and remain_batch_query_h
+the same as last section

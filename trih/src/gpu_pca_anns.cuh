@@ -79,7 +79,7 @@ public:
   half* half_batch_query_d;
   float* pca_batch_query_d;
   float* remain_batch_query_d;
-  float* remain_batch_query_h;
+  // float* remain_batch_query_h;
   half* alpha0_d;
   half* beta0_d;
 /// for query project
@@ -112,7 +112,7 @@ public:
   float* base_dataset_norms_h;
   ThreadPool *rerank_thread_pool;
   static std::mutex thread_pool_mutex;
-  uint8_t* quant_queries_h;
+  // uint8_t* quant_queries_h;
   std::shared_ptr< std::vector<sq_info>> sq_info_h; 
 /// for re-rank
 
@@ -160,7 +160,9 @@ public:
     half *phase1_distances_h,
     int *phase1_ids_h,
     int *phase2_ids_h,
-    // cudaEvent_t syncEvent, 
+    // cudaEvent_t syncEvent,
+    float *remain_batch_query_h,
+    uint8_t *quant_queries_h,
     bool verbose);
 };
 
@@ -172,7 +174,9 @@ void search_task(
   half *phase1_distances_h,
   int *phase1_ids_h,
   int *phase2_ids_h,
-  int query_batch_num
+  int query_batch_num,
   // , cudaEvent_t* syncEvent
+  float *remain_batch_query_h,
+  uint8_t *quant_queries_h
   );
 ///

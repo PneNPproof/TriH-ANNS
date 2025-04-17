@@ -42,8 +42,8 @@ int main(int argc, char *argv[])
 
     // const char *data_dir = "/home/yshen/ann-benchmarks/data";
     // const char *index_dir = "/home/wangzhe/TriH-ANNS/index";
-    // const char *data_dir = "/Trih/dataset/dataset_shuffle";
-    const char *data_dir = "/paper_experiment/data";
+    const char *data_dir = "/Trih/dataset/dataset_shuffle";
+    // const char *data_dir = "/paper_experiment/data";
     const char *index_dir = "/paper_experiment/index";
 
     char filename[100];
@@ -189,9 +189,19 @@ int main(int argc, char *argv[])
             // warmup_batch_query[i] = rand() / (float)RAND_MAX;
             warmup_batch_query[i] = 0;
         }
-        half *candidate_topk_dists_1 = (half *)malloc(phase1_topk * query_batch_size * sizeof(half));
-        int *candidate_topk_ids_1 = (int *)malloc(phase1_topk * query_batch_size * sizeof(int));
+        // half *candidate_topk_dists_1 = (half *)malloc(phase1_topk * query_batch_size * sizeof(half));
+        // int *candidate_topk_ids_1 = (int *)malloc(phase1_topk * query_batch_size * sizeof(int));
+        half *candidate_topk_dists_1;
+        int *candidate_topk_ids_1;
+        aligned_malloc_host((void **)&candidate_topk_dists_1, phase1_topk * query_batch_size * sizeof(half), 64);
+        aligned_malloc_host((void **)&candidate_topk_ids_1, phase1_topk * query_batch_size * sizeof(int), 64);
         int *topk_ids_1 = (int *)malloc(phase2_topk * query_batch_size * sizeof(int));
+
+        float *remain_batch_query_1;
+        uint8_t *quant_queries_1;
+        aligned_malloc_host((void **)&remain_batch_query_1, query_batch_size * (index.dim - index.column_num) * sizeof(float), 64);
+        aligned_malloc_host((void **)&quant_queries_1, query_batch_size * (index.dim - index.column_num) * sizeof(uint8_t), 64);
+
         // cudaEvent_t syncEvent;
         // cudaEventCreate(&syncEvent);
 
@@ -201,6 +211,8 @@ int main(int argc, char *argv[])
             candidate_topk_dists_1,
             candidate_topk_ids_1,
             topk_ids_1,
+            remain_batch_query_1,
+            quant_queries_1,
             // syncEvent,
             false);
         // rerank_task_scheduler_pool.wait();
@@ -212,8 +224,12 @@ int main(int argc, char *argv[])
         ///
 
         /// using multi_worker to process multiple query batches
-        half *candidate_topk_dists = (half *)malloc(phase1_topk * query_batch_size * query_batch_num * sizeof(half));
-        int *candidate_topk_ids = (int *)malloc(phase1_topk * query_batch_size * query_batch_num * sizeof(int));
+        // half *candidate_topk_dists = (half *)malloc(phase1_topk * query_batch_size * query_batch_num * sizeof(half));
+        // int *candidate_topk_ids = (int *)malloc(phase1_topk * query_batch_size * query_batch_num * sizeof(int));
+        half *candidate_topk_dists;
+        int *candidate_topk_ids;
+        aligned_malloc_host((void **)&candidate_topk_dists, phase1_topk * query_batch_size * query_batch_num * sizeof(half), 64);
+        aligned_malloc_host((void **)&candidate_topk_ids, phase1_topk * query_batch_size * query_batch_num * sizeof(int), 64);
         // cudaEvent_t* syncEvents = new cudaEvent_t[query_batch_num];
 
         // for (int i = 0; i < query_batch_num; i++) {
@@ -221,6 +237,12 @@ int main(int argc, char *argv[])
         // }
 
         int *topk_ids = (int *)malloc(phase2_topk * query_batch_size * query_batch_num * sizeof(int));
+
+        float *remain_batch_query;
+        uint8_t *quant_queries;
+        aligned_malloc_host((void **)&remain_batch_query, query_batch_num * query_batch_size * (index.dim - index.column_num) * sizeof(float), 64);
+        aligned_malloc_host((void **)&quant_queries, query_batch_num * query_batch_size * (index.dim - index.column_num) * sizeof(uint8_t), 64);
+
         std::vector<std::thread> workers_threads;
 
         auto multi_worker_search_begin = std::chrono::high_resolution_clock::now();
@@ -235,7 +257,9 @@ int main(int argc, char *argv[])
                 candidate_topk_dists,
                 candidate_topk_ids,
                 topk_ids,
-                query_batch_num
+                query_batch_num,
+                remain_batch_query,
+                quant_queries
                 // , syncEvents
             );
         }

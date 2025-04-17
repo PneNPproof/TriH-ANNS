@@ -21,6 +21,8 @@ std::mutex TrihAnnsWorker::thread_pool_mutex;
 
 extern sq_info *p_sq_info;
 extern BS::thread_pool<> *rr_pool;
+
+std::mutex rr_pool_mutex;
 // extern BS::thread_pool<> rerank_task_scheduler_pool;
 
 extern int file_ind;
@@ -136,10 +138,10 @@ TrihAnnsWorker::TrihAnnsWorker(
 
   // quant_queries_h = static_cast<uint8_t*>(aligned_alloc(64, (dim - pca_dim) * max_queries_num_ * sizeof(uint8_t)));
 
-  aligned_malloc_host(
-      (void **)&quant_queries_h,
-      (dim - pca_dim) * max_queries_num_ * sizeof(uint8_t),
-      64);
+  // aligned_malloc_host(
+  //     (void **)&quant_queries_h,
+  //     (dim - pca_dim) * max_queries_num_ * sizeof(uint8_t),
+  //     64);
 
   sq_info_h = std::make_shared<std::vector<sq_info>>();
   sq_info_h->reserve(data_num_);
@@ -219,7 +221,7 @@ TrihAnnsWorker::TrihAnnsWorker(
   /// allocate memory for batch_query_d, pca_batch_query_d, half_batch_query_d
   CHECK_CUDA_ERROR(cudaMalloc(&batch_query_d, max_queries_num * dim * sizeof(float)));
   CHECK_CUDA_ERROR(cudaMalloc(&remain_batch_query_d, max_queries_num * (dim - pca_dim) * sizeof(float)));
-  CHECK_CUDA_ERROR(cudaMallocHost(&remain_batch_query_h, max_queries_num * (dim - pca_dim) * sizeof(float)));
+  // CHECK_CUDA_ERROR(cudaMallocHost(&remain_batch_query_h, max_queries_num * (dim - pca_dim) * sizeof(float)));
   CHECK_CUDA_ERROR(cudaMalloc(&pca_batch_query_d, max_queries_num * pca_dim * sizeof(float)));
   CHECK_CUDA_ERROR(cudaMalloc(&half_batch_query_d, max_queries_num * dim * sizeof(half)));
   ///
@@ -347,9 +349,9 @@ TrihAnnsWorker::TrihAnnsWorker(
 
   temp_storage_bytes = 1024 * 1024 * 1024;
 
-  #ifdef DETAILED_LOG
+#ifdef DETAILED_LOG
   printf("temp_storage_bytes in construction: %d\n", temp_storage_bytes);
-  #endif
+#endif
 
   CHECK_CUDA_ERROR(cudaMalloc(&temp_storage_d, temp_storage_bytes));
   ///
@@ -402,7 +404,7 @@ TrihAnnsWorker::TrihAnnsWorker(
   cudaMalloc(&half_batch_query_d, max_queries_num * dim * sizeof(half));
 
   cudaMalloc(&remain_batch_query_d, max_queries_num * (dim - pca_dim) * sizeof(float));
-  cudaMallocHost(&remain_batch_query_h, max_queries_num * (dim - pca_dim) * sizeof(float));
+  // cudaMallocHost(&remain_batch_query_h, max_queries_num * (dim - pca_dim) * sizeof(float));
   ///
 
   /// allocate half_dists_d and half_pca_queries_d
@@ -433,10 +435,10 @@ TrihAnnsWorker::TrihAnnsWorker(
   ///
 
   // quant_queries_h = static_cast<uint8_t*>(aligned_alloc(64, (dim - pca_dim) * max_queries_num * sizeof(uint8_t)));
-  aligned_malloc_host(
-      (void **)&quant_queries_h,
-      (dim - pca_dim) * max_queries_num * sizeof(uint8_t),
-      64);
+  // aligned_malloc_host(
+  //     (void **)&quant_queries_h,
+  //     (dim - pca_dim) * max_queries_num * sizeof(uint8_t),
+  //     64);
 }
 
 void rerank_task_scheduler(
@@ -446,18 +448,20 @@ void rerank_task_scheduler(
     int batch_query_num,
     half *phase1_distances_h,
     int *phase1_ids_h,
-    int *phase2_ids_h)
+    int *phase2_ids_h,
+    float *remain_batch_query_h,
+    uint8_t *quant_queries_h)
 {
   cudaEventSynchronize(syncEvent);
   for (int i = 0; i < batch_query_num; i++)
   {
     rr_pool->detach_task(
-        [worker, batch_query, i, phase1_distances_h, phase1_ids_h, phase2_ids_h]
+        [worker, batch_query, i, phase1_distances_h, phase1_ids_h, phase2_ids_h, quant_queries_h, remain_batch_query_h]
         {
           re_rank(
               batch_query + i * worker->dim,
-              worker->quant_queries_h + i * (worker->dim - worker->pca_dim),
-              worker->remain_batch_query_h + i * (worker->dim - worker->pca_dim),
+              quant_queries_h + i * (worker->dim - worker->pca_dim),
+              remain_batch_query_h + i * (worker->dim - worker->pca_dim),
               worker->dim,
               worker->pca_dim,
               worker->sq_info_h->data(),
@@ -478,6 +482,8 @@ void TrihAnnsWorker::batch_query_search(
     int *phase1_ids_h,
     int *phase2_ids_h,
     // cudaEvent_t syncEvent,
+    float *remain_batch_query_h,
+    uint8_t *quant_queries_h,
     bool verbose)
 {
   // auto start_time = std::chrono::high_resolution_clock::now();
@@ -774,9 +780,12 @@ void TrihAnnsWorker::batch_query_search(
   /// assign rerank tasks
   // std::vector<std::future<int>> results;
 
+  std::cout << "there are " << rr_pool->get_tasks_queued() << " in pool" << std::endl;
   {
     // std::lock_guard<std::mutex> lock(thread_pool_mutex);
     // printf("re-renk task assign\n");
+
+    // rr_pool_mutex.lock();
     for (int i = 0; i < batch_query_num; i++)
     {
       // rr_pool->detach_task(
@@ -796,12 +805,12 @@ void TrihAnnsWorker::batch_query_search(
       //     });
 
       rr_pool->detach_task(
-          [this, batch_query, i, phase1_distances_h, phase1_ids_h, phase2_ids_h]
+          [this, batch_query, i, phase1_distances_h, phase1_ids_h, phase2_ids_h, quant_queries_h, remain_batch_query_h]
           {
             re_rank(
                 batch_query + i * this->dim,
-                this->quant_queries_h + i * (this->dim - this->pca_dim),
-                this->remain_batch_query_h + i * (this->dim - this->pca_dim),
+                quant_queries_h + i * (this->dim - this->pca_dim),
+                remain_batch_query_h + i * (this->dim - this->pca_dim),
                 this->dim,
                 this->pca_dim,
                 this->sq_info_h->data(),
@@ -812,6 +821,8 @@ void TrihAnnsWorker::batch_query_search(
                 this->phase2_topk);
           });
     }
+    // rr_pool->wait();
+    // rr_pool_mutex.unlock();
   }
   // auto rerank_end = std::chrono::high_resolution_clock::now();
   // auto rerank_duration = std::chrono::duration_cast<std::chrono::microseconds>(rerank_end - rerank_start).count();
@@ -827,9 +838,10 @@ void search_task(
     half *phase1_distances_h,
     int *phase1_ids_h,
     int *phase2_ids_h,
-    int query_batch_num
+    int query_batch_num,
     // , cudaEvent_t* syncEvent
-)
+    float *remain_batch_query_h,
+    uint8_t *quant_queries_h)
 {
   // repeatly call batch_query_search until all queries are processed
   while (true)
@@ -846,6 +858,8 @@ void search_task(
         phase1_ids_h + current_query_batch_num * batch_query_num * worker->phase1_topk,
         phase2_ids_h + current_query_batch_num * batch_query_num * worker->phase2_topk,
         // syncEvent[current_query_batch_num],
+        remain_batch_query_h + current_query_batch_num * batch_query_num * (worker->dim - worker->pca_dim),
+        quant_queries_h + current_query_batch_num * batch_query_num * (worker->dim - worker->pca_dim),
         current_query_batch_num == 0 ? true : false);
   }
 }
