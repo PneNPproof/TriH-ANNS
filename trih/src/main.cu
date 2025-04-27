@@ -39,11 +39,7 @@ atomic<int> query_batch_counter(0);
 
 int main(int argc, char *argv[])
 {
-
-    // const char *data_dir = "/home/yshen/ann-benchmarks/data";
-    // const char *index_dir = "/home/wangzhe/TriH-ANNS/index";
     const char *data_dir = "/Trih/dataset/dataset_shuffle";
-    // const char *data_dir = "/paper_experiment/data";
     const char *index_dir = "/paper_experiment/index";
 
     char filename[100];
