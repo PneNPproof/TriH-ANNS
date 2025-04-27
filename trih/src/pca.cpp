@@ -2,20 +2,18 @@
 #include <iostream>
 #include <fstream>
 
-
 #include <stdio.h>
 #include <stdlib.h>
 
 #include "pca.h"
 #include "shuffle.h"
 
+#include "pca.cuh"
+
 #define MAX_SAMPLE 1000000
 
 using namespace std;
 
-//remain: 剩余的pca特征向量
-//N0 原始数据个数； D 原始数据维度；ratio / d 降维特征值累积和比率或维度目标；
-//pca_data pca 所有特征值，个数 D 个；
 void PCA(const float* src, const int N0, const int D, float &ratio, int &d, float*& pca_data) {
     
     int N = N0;
@@ -41,19 +39,14 @@ void PCA(const float* src, const int N0, const int D, float &ratio, int &d, floa
         }
     }
 
-    //1. 协方差
     Eigen::MatrixXf cov_matrix = (matrix.transpose() * matrix) / float(matrix.rows() -1);
 
-    //2. 特征值分解
     Eigen::SelfAdjointEigenSolver<Eigen::MatrixXf> solver(cov_matrix);
 
-    //3. 获取特征值
     Eigen::VectorXf eigen_values = solver.eigenvalues().real();
 
-    //4. 获取特征向量
     Eigen::MatrixXf eigen_vectors = solver.eigenvectors().real();
 
-    //5. 降序排列
     std::vector<EigenPair> eigen_pairs(D);
     for(int i=0; i<D; i++) {
         eigen_pairs[i].value = eigen_values[i];
@@ -69,8 +62,7 @@ void PCA(const float* src, const int N0, const int D, float &ratio, int &d, floa
     for(int i=0; i<D; i++) 
         sum += eigen_pairs[i].value;
 
-    //修改 ratio 以及 d，表示达到降维要求的目标
-    if(d <= 0) { //根据ratio输出
+    if(d <= 0) {
 
         if(ratio <= 0) {
             cout << "Wrong parameter: ratio" << endl;
@@ -86,21 +78,15 @@ void PCA(const float* src, const int N0, const int D, float &ratio, int &d, floa
                 break;
             }
         }
-        d+=1; // total d vectors
+        d+=1;
     }
-    else { //根据 d 输出
+    else {
         float total = 0;
         for(int i=0; i<d; i++) 
             total += eigen_pairs[i].value;
         ratio = total/sum;
     }
 
-    //输出完整的D个PCA特征向量
-    // float *comp = new float[D*d];
-    // for(int i=0; i<D; i++) {
-    //     for(int j=0; j<d; j++)
-    //         comp[i*d+j] = eigen_pairs[j].vec[i];
-    // }
     pca_data = new float[D*D];
     for(int i=0; i<D; i++) {
         for(int j=0; j<D; j++)
@@ -118,11 +104,54 @@ void save_pca_index(float *data, int dim, int record_num, //原始数据
 
     cout << "Start PCA ..." << endl;
     float *pca_data;
-    PCA(data, record_num, dim, ratio, column_num, pca_data); //得到  dim * dim 矩阵, columns可以是函数输出
+    float *trans_data = new float[record_num*column_num]{0};
+    float *trans_data_remain = new float[record_num*(dim-column_num)]{0};
+    // PCA(data, record_num, dim, ratio, column_num, pca_data); 
+    PCA_CUDA(data, record_num, dim, ratio, column_num, pca_data);
+    
+    // transpose pca_data
+    for (int i = 0; i < dim; ++i) {
+        for (int j = i + 1; j < dim; ++j) {
+            std::swap(pca_data[i * dim + j], pca_data[j * dim + i]);
+        }
+    }
 
-    cout << "PCA ratio=" << ratio << "  column_num=" << column_num << endl;
+    try {
+        projectPCA_CUDA(data, pca_data, trans_data, trans_data_remain, record_num, dim, column_num);
+    } catch (const std::exception& e) {
+         std::cerr << "!!! CUDA Projection Failed: " << e.what() << std::endl;
+         // Cleanup memory before exiting
+         delete[] data;
+         delete[] pca_data;
+         delete[] trans_data;
+         delete[] trans_data_remain; // Safe even if nullptr
+         return ; // Indicate error
+    }
 
+    cout << "PCA projection complete." << endl;
+    
+    
+//     cout << "Start PCA projecting..." << endl;
+    
+// #pragma omp parallel for
+//     for(int r=0; r<record_num; r++) {
+//         for(int c=0; c<column_num; c++) {
+//             for(int d=0; d<dim; d++)
+//                 trans_data[r*column_num+c] += data[r*dim+d] * pca_data[d*dim+c];
+//         }
+//     }
 
+//     cout << "Start PCA remain projecting..." << endl;
+    
+// #pragma omp parallel for
+//     for(int r=0; r<record_num; r++) {
+//         for(int c=0; c<dim-column_num; c++) {
+//             for(int d=0; d<dim; d++)
+//                 trans_data_remain[r*(dim-column_num)+c] += data[r*dim+d] * pca_data[d*dim+column_num+c];
+//         }
+//     }
+
+    
     //保存 基础信息
     ofs.write((const char *)&dim, sizeof(int)); //数据维度，960
     ofs.write((const char *)&record_num, sizeof(int)); //数据向量个数
@@ -130,39 +159,10 @@ void save_pca_index(float *data, int dim, int record_num, //原始数据
     ofs.write((const char *)&ratio, sizeof(float)); //比率
     ofs.write((const char *)pca_data, sizeof(float)*dim*dim); //保存所有特征向量，dim个特征向量
 
-    cout << "Start PCA projecting..." << endl;
-    //使用特征向量，得到原始数据的PCA降维投影
-    float *trans_data = new float[record_num*column_num]{0};
-#pragma omp parallel for
-    for(int r=0; r<record_num; r++) {//原始数据每一个向量, shape record_num x dim, 1000000 x 960
-        for(int c=0; c<column_num; c++) {//投影的向量的每一个元素, trans_data shape record_num x column_num, 1000000 x column_num
-            for(int d=0; d<dim; d++)
-                trans_data[r*column_num+c] += data[r*dim+d] * pca_data[d*dim+c];
-
-            //yshen
-            // trans_data[r*column_num+c] = data[r*dim+c]; //不进行投影，用于全维度的时候，验证不投影情况下的recall，注意：column_num == dim
-        }
-    }
-
     ofs.write((const char *)trans_data, sizeof(float)*record_num*column_num);
-    delete [] trans_data;
-    
-    if(dim <= column_num)
-        return;
-
-    cout << "Start PCA remain projecting..." << endl;
-    //使用特征向量，得到原始数据的除了PCA上述投影之外的投影
-    float *trans_data_remain = new float[record_num*(dim-column_num)]{0};
-#pragma omp parallel for
-    for(int r=0; r<record_num; r++) {//原始数据每一个向量, shape record_num x dim, 1000000 x 960
-        for(int c=0; c<dim-column_num; c++) {//投影的向量的每一个元素, trans_data shape record_num x column_num, 1000000 x column_num
-            for(int d=0; d<dim; d++)
-                trans_data_remain[r*(dim-column_num)+c] += data[r*dim+d] * pca_data[d*dim+column_num+c];
-        }
-    }
-
     ofs.write((const char *)trans_data_remain, sizeof(float)*record_num*(dim-column_num));
 
+    delete [] trans_data;
     delete [] trans_data_remain;
     delete [] pca_data;
 

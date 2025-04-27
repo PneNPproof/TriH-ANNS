@@ -62,6 +62,7 @@ add_executable(${TARGET_NAME}
                 gpu/l2mm.cu 
                 gpu/reduce_min.cu
                 gpu/rerank.cu
+                gpu/pca.cu
                 src/sq.cpp
                 src/data.cpp
                 )
@@ -88,6 +89,7 @@ endif()
 set(CUDART_LIBRARY cudart)
 set(CUBLASLT_LIBRARY cublasLt)
 set(CUBLASLT_LIBRARY cublas)
+set(CUDA_cusolver_LIBRARY cusolver)
 
 find_library(CUDART_LIBRARY cudart ${CMAKE_CUDA_IMPLICIT_LINK_DIRECTORIES})
 # find_library(CUBLASLT_LIBRARY cublasLt ${CMAKE_CUDA_IMPLICIT_LINK_DIRECTORIES})
@@ -99,6 +101,7 @@ target_link_libraries(${TARGET_NAME} PRIVATE
     ${CUDART_LIBRARY}
     # ${CUBLASLT_LIBRARY}
     ${CUBLAS_LIBRARY}
+    ${CUDA_cusolver_LIBRARY}
 )
 
 target_link_libraries(${TARGET_NAME} PRIVATE OpenMP::OpenMP_CXX)

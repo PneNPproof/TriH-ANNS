@@ -17,7 +17,7 @@
         "CMAKE_BUILD_TYPE": "Release",
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
         "CMAKE_VERBOSE_MAKEFILE": "ON",
-        "ENABLE_DETAILED_LOG": "OFF"
+        "ENABLE_DETAILED_LOG": "ON"
       }
     }
   ],
