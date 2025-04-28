@@ -109,6 +109,7 @@ public:
   half *phase1_distances_h;
   float* base_dataset_h;
   float* pca_dataset_h;
+  float* pca_dataset_d;
   float* base_dataset_norms_h;
   ThreadPool *rerank_thread_pool;
   static std::mutex thread_pool_mutex;

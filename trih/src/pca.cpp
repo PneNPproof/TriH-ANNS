@@ -97,17 +97,23 @@ void PCA(const float* src, const int N0, const int D, float &ratio, int &d, floa
     delete [] mean;
 }
 
+#include <chrono>
 //为一组数据求PCA，并且保存特征向量，以及投影向量
 void save_pca_index(float *data, int dim, int record_num, //原始数据
             float &ratio, int &column_num, //PCA 参数
             ofstream &ofs) {
 
+    auto start_time = std::chrono::high_resolution_clock::now();
     cout << "Start PCA ..." << endl;
     float *pca_data;
     float *trans_data = new float[record_num*column_num]{0};
     float *trans_data_remain = new float[record_num*(dim-column_num)]{0};
     // PCA(data, record_num, dim, ratio, column_num, pca_data); 
     PCA_CUDA(data, record_num, dim, ratio, column_num, pca_data);
+
+    auto end_time1 = std::chrono::high_resolution_clock::now();
+    auto duration1 = std::chrono::duration_cast<std::chrono::milliseconds>(end_time1 - start_time);
+    std::cout << "Time taken for pca: " << duration1.count() << " ms" << std::endl;
     
     // transpose pca_data
     for (int i = 0; i < dim; ++i) {
@@ -121,14 +127,18 @@ void save_pca_index(float *data, int dim, int record_num, //原始数据
     } catch (const std::exception& e) {
          std::cerr << "!!! CUDA Projection Failed: " << e.what() << std::endl;
          // Cleanup memory before exiting
-         delete[] data;
-         delete[] pca_data;
-         delete[] trans_data;
-         delete[] trans_data_remain; // Safe even if nullptr
+        //  delete[] data;
+        //  delete[] pca_data;
+        //  delete[] trans_data;
+        //  delete[] trans_data_remain; // Safe even if nullptr
          return ; // Indicate error
     }
 
     cout << "PCA projection complete." << endl;
+    auto end_time = std::chrono::high_resolution_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
+    std::cout << "Time taken for pca info build time: " << duration.count() << " ms" << std::endl;
+
     
     
 //     cout << "Start PCA projecting..." << endl;

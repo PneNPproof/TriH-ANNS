@@ -101,6 +101,166 @@ __global__ void float_to_half_kernel(float *input, half *output, int size)
   }
 }
 
+// Kernel 1: Convert float dataset to half dataset element-wise
+__global__ void convertFloatToHalfKernel(const float *__restrict__ float_data,
+                                         half *__restrict__ half_data,
+                                         size_t num_elements)
+{
+  size_t idx = (size_t)blockIdx.x * blockDim.x + threadIdx.x;
+
+  if (idx < num_elements)
+  {
+    half_data[idx] = __float2half(float_data[idx]);
+  }
+}
+
+// Kernel 2: Calculate squared norms from float data, convert result to half, and replicate
+__global__ void calculateNormsAndConvertToHalfKernel(const float *__restrict__ pca_dataset_d,     // Input: Original float data (data_num x pca_dim)
+                                                     half *__restrict__ half_pca_dataset_norms_d, // Output: Half precision norms (max_queries_num x data_num)
+                                                     int data_num,
+                                                     int pca_dim,
+                                                     int max_queries_num)
+{
+  int r = blockIdx.x * blockDim.x + threadIdx.x; // Global row index (data point index)
+
+  // Boundary check for data points
+  if (r < data_num)
+  {
+    float norm_sq = 0.0f;
+
+    // Calculate squared norm using float precision for accuracy
+    // Accessing pca_dataset_d in a potentially non-coalesced way row-wise,
+    // but okay for moderate pca_dim. Could optimize with shared memory/block reduction if needed.
+    const float *row_ptr = pca_dataset_d + (size_t)r * pca_dim;
+    for (int d = 0; d < pca_dim; ++d)
+    {
+      float val = row_ptr[d];
+      norm_sq += val * val;
+    }
+
+    // Convert the final float result to half
+    half half_norm_sq = __float2half(norm_sq);
+
+    // Replicate the result for each query index 'q'
+    // This writes to potentially strided locations in global memory.
+    for (int q = 0; q < max_queries_num; ++q)
+    {
+      // Indexing: norm for data point 'r' at query 'q'
+      half_pca_dataset_norms_d[(size_t)q * data_num + r] = half_norm_sq;
+    }
+  }
+}
+
+void processDataAndNormsGPU(const float *h_pca_dataset,      // IN: Host float dataset
+                            half *&d_half_pca_dataset,       // OUT: Device half dataset (allocated by func)
+                            half *&d_half_pca_dataset_norms, // OUT: Device half norms (allocated by func)
+                            int data_num,
+                            int pca_dim,
+                            int max_queries_num)
+{
+  if (!h_pca_dataset)
+  {
+    throw std::invalid_argument("Received null pointer for host dataset");
+  }
+  if (data_num <= 0 || pca_dim <= 0 || max_queries_num <= 0)
+  {
+    // Allow zero dimensions? Maybe, depends on usage. For now, assume positive.
+    throw std::invalid_argument("Invalid dimensions provided");
+  }
+
+  // Ensure output pointers are initially null to avoid double allocation if called multiple times
+  if (d_half_pca_dataset != nullptr || d_half_pca_dataset_norms != nullptr)
+  {
+    throw std::runtime_error("Output device pointers must be null before calling processDataAndNormsGPU");
+  }
+
+  std::cout << "Starting GPU data processing (Conversion & Norms)..." << std::endl;
+  auto total_start_time = std::chrono::high_resolution_clock::now();
+
+  float *d_pca_dataset = nullptr; // Intermediate float dataset on device
+
+  // Calculate sizes
+  size_t dataset_elements = (size_t)data_num * pca_dim;
+  size_t dataset_float_size = dataset_elements * sizeof(float);
+  size_t dataset_half_size = dataset_elements * sizeof(half);
+  size_t norms_elements = (size_t)data_num * max_queries_num;
+  size_t norms_half_size = norms_elements * sizeof(half);
+
+  try
+  {
+    auto section_start_time = std::chrono::high_resolution_clock::now();
+
+    // 1. Allocate all necessary device memory
+    std::cout << "  Allocating GPU memory..." << std::endl;
+    CHECK_CUDA_ERROR(cudaMalloc(&d_pca_dataset, dataset_float_size));
+    CHECK_CUDA_ERROR(cudaMalloc((void **)&d_half_pca_dataset, dataset_half_size));
+    CHECK_CUDA_ERROR(cudaMalloc((void **)&d_half_pca_dataset_norms, norms_half_size));
+
+    auto end_time = std::chrono::high_resolution_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - section_start_time);
+    std::cout << "  Time taken for GPU allocation: " << duration.count() << " ms" << std::endl;
+    section_start_time = end_time;
+
+    // 2. Copy original float data from Host to Device
+    std::cout << "  Copying float data H->D..." << std::endl;
+    CHECK_CUDA_ERROR(cudaMemcpy(d_pca_dataset, h_pca_dataset, dataset_float_size, cudaMemcpyHostToDevice));
+
+    end_time = std::chrono::high_resolution_clock::now();
+    duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - section_start_time);
+    std::cout << "  Time taken for H->D copy: " << duration.count() << " ms" << std::endl;
+    section_start_time = end_time;
+
+    // 3. Launch Kernel 1: Convert float dataset to half dataset on GPU
+    std::cout << "  Launching float->half conversion kernel..." << std::endl;
+    const int threads_per_block = 256; // Common block size, tune if necessary
+    int blocks_conversion = (dataset_elements + threads_per_block - 1) / threads_per_block;
+    convertFloatToHalfKernel<<<blocks_conversion, threads_per_block>>>(d_pca_dataset, d_half_pca_dataset, dataset_elements);
+    CHECK_CUDA_ERROR(cudaPeekAtLastError()); // Check for launch errors
+
+    // 4. Launch Kernel 2: Calculate norms (from float), convert to half, replicate on GPU
+    std::cout << "  Launching norm calculation kernel..." << std::endl;
+    int blocks_norms = (data_num + threads_per_block - 1) / threads_per_block;
+    calculateNormsAndConvertToHalfKernel<<<blocks_norms, threads_per_block>>>(d_pca_dataset, d_half_pca_dataset_norms, data_num, pca_dim, max_queries_num);
+    CHECK_CUDA_ERROR(cudaPeekAtLastError()); // Check for launch errors
+
+    // 5. Synchronize device to ensure kernels complete and get accurate timing
+    std::cout << "  Synchronizing device..." << std::endl;
+    CHECK_CUDA_ERROR(cudaDeviceSynchronize());
+
+    end_time = std::chrono::high_resolution_clock::now();
+    duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - section_start_time);
+    std::cout << "  Time taken for GPU kernels + sync: " << duration.count() << " ms" << std::endl;
+
+    // 6. Free intermediate float data on device
+    std::cout << "  Freeing intermediate GPU memory..." << std::endl;
+    CHECK_CUDA_ERROR(cudaFree(d_pca_dataset));
+    d_pca_dataset = nullptr; // Mark as freed
+
+    auto total_end_time = std::chrono::high_resolution_clock::now();
+    auto total_duration = std::chrono::duration_cast<std::chrono::milliseconds>(total_end_time - total_start_time);
+    std::cout << "GPU data processing finished. Total time: " << total_duration.count() << " ms" << std::endl;
+  }
+  catch (const std::exception &e)
+  {
+    std::cerr << "Error during GPU data processing: " << e.what() << std::endl;
+    // Clean up any allocated memory before re-throwing
+    if (d_pca_dataset)
+      cudaFree(d_pca_dataset);
+    // If allocation failed, the pointers might still be null. If it succeeded but later failed, free them.
+    if (d_half_pca_dataset)
+    {
+      cudaFree(d_half_pca_dataset);
+      d_half_pca_dataset = nullptr; // Prevent caller from using invalid pointer
+    }
+    if (d_half_pca_dataset_norms)
+    {
+      cudaFree(d_half_pca_dataset_norms);
+      d_half_pca_dataset_norms = nullptr; // Prevent caller from using invalid pointer
+    }
+    throw; // Re-throw the exception
+  }
+}
+
 TrihAnnsWorker::TrihAnnsWorker(
     pca_index &index,
     float *full_dim_pca_data, // each column is a eigen vector(length dim), row-major stored
@@ -132,19 +292,8 @@ TrihAnnsWorker::TrihAnnsWorker(
   alpha = ElementOutput(-2);
   beta = ElementOutput(1);
 
-  /// copy to alpha_d, beta_d
-  CHECK_CUDA_ERROR(cudaMalloc(&alpha_d, sizeof(ElementOutput)));
-  CHECK_CUDA_ERROR(cudaMalloc(&beta_d, sizeof(ElementOutput)));
-  CHECK_CUDA_ERROR(cudaMemcpy(alpha_d, &alpha, sizeof(ElementOutput), cudaMemcpyHostToDevice));
-  CHECK_CUDA_ERROR(cudaMemcpy(beta_d, &beta, sizeof(ElementOutput), cudaMemcpyHostToDevice));
-  ///
-
-  // quant_queries_h = static_cast<uint8_t*>(aligned_alloc(64, (dim - pca_dim) * max_queries_num_ * sizeof(uint8_t)));
-
-  // aligned_malloc_host(
-  //     (void **)&quant_queries_h,
-  //     (dim - pca_dim) * max_queries_num_ * sizeof(uint8_t),
-  //     64);
+  auto total_start_time = std::chrono::high_resolution_clock::now();
+  auto section_start_time = std::chrono::high_resolution_clock::now();
 
   sq_info_h = std::make_shared<std::vector<sq_info>>();
   sq_info_h->reserve(data_num_);
@@ -153,6 +302,8 @@ TrihAnnsWorker::TrihAnnsWorker(
     sq_info_h->emplace_back(dim_);
   }
 
+  // timing using chrono
+  auto start_time = std::chrono::high_resolution_clock::now();
   gen_sq_info(
       index.trans_data_remain,
       dim - pca_dim,
@@ -160,16 +311,13 @@ TrihAnnsWorker::TrihAnnsWorker(
       data_num,
       sq_info_h->data(),
       -1);
+  auto end_time = std::chrono::high_resolution_clock::now();
+  auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
+  std::cout << "Time taken for gen_sq_info: " << duration.count() << " ms" << std::endl;
 
   constexpr size_t alignment = 64;
-  // full_dim_pca_data_h = (float *)aligned_alloc(alignment, dim * dim * sizeof(float));
-  // base_dataset_h = (float *)aligned_alloc(alignment, data_num * dim * sizeof(float));
-  // pca_dataset_h = (float *)aligned_alloc(alignment, data_num * pca_dim * sizeof(float));
 
-  // CHECK_CUDA_ERROR(cudaMemcpy(full_dim_pca_data_h, full_dim_pca_data, dim * dim * sizeof(float), cudaMemcpyHostToHost));
-  // CHECK_CUDA_ERROR(cudaMemcpy(base_dataset_h, base_dataset, data_num * dim * sizeof(float), cudaMemcpyHostToHost));
-  // CHECK_CUDA_ERROR(cudaMemcpy(pca_dataset_h, pca_dataset, data_num * pca_dim * sizeof(float), cudaMemcpyHostToHost));
-
+  section_start_time = std::chrono::high_resolution_clock::now();
   /// initialize pca_dim_pca_data_d using full_dim_pca_data_h
   auto pca_dim_pca_data_h = (float *)aligned_alloc(alignment, pca_dim * dim * sizeof(float));
   auto remain_dim_pca_data_h = (float *)aligned_alloc(alignment, (dim - pca_dim) * dim * sizeof(float));
@@ -187,67 +335,53 @@ TrihAnnsWorker::TrihAnnsWorker(
       remain_dim_pca_data_h[i * dim + j] = full_dim_pca_data_h[j * dim + pca_dim + i];
     }
   }
+  end_time = std::chrono::high_resolution_clock::now();
+  duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - section_start_time);
+  std::cout << "Time taken for PCA data initialization: " << duration.count() << " ms" << std::endl;
+
+  section_start_time = std::chrono::high_resolution_clock::now();
   CHECK_CUDA_ERROR(cudaMalloc(&pca_dim_pca_data_d, pca_dim * dim * sizeof(float)));
   CHECK_CUDA_ERROR(cudaMemcpy(pca_dim_pca_data_d, pca_dim_pca_data_h, pca_dim * dim * sizeof(float), cudaMemcpyHostToDevice));
-  // cudaFreeHost(pca_dim_pca_data_h);
   free(pca_dim_pca_data_h);
+  end_time = std::chrono::high_resolution_clock::now();
+  duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - section_start_time);
+  std::cout << "Time taken for pca_dim_pca_data allocation and copy: " << duration.count() << " ms" << std::endl;
 
+  section_start_time = std::chrono::high_resolution_clock::now();
   CHECK_CUDA_ERROR(cudaMalloc(&remain_dim_pca_data_d, (dim - pca_dim) * dim * sizeof(float)));
   CHECK_CUDA_ERROR(cudaMemcpy(remain_dim_pca_data_d, remain_dim_pca_data_h, (dim - pca_dim) * dim * sizeof(float), cudaMemcpyHostToDevice));
-  // cudaFreeHost(remain_dim_pca_data_h);
   free(remain_dim_pca_data_h);
-  ///
+  end_time = std::chrono::high_resolution_clock::now();
+  duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - section_start_time);
+  std::cout << "Time taken for remain_dim_pca_data allocation and copy: " << duration.count() << " ms" << std::endl;
 
+  section_start_time = std::chrono::high_resolution_clock::now();
   /// transform pca_dim_pca_data_d to half precision
   CHECK_CUDA_ERROR(cudaMalloc(&half_pca_dim_pca_data_d, pca_dim * dim * sizeof(half)));
   float_to_half_kernel<<<(pca_dim * dim + 255) / 256, 256, 0, work_stream>>>(pca_dim_pca_data_d, half_pca_dim_pca_data_d, pca_dim * dim);
   CHECK_CUDA_ERROR(cudaStreamSynchronize(work_stream));
-  ///
+  end_time = std::chrono::high_resolution_clock::now();
+  duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - section_start_time);
+  std::cout << "Time taken for half precision conversion: " << duration.count() << " ms" << std::endl;
 
-  /// calculate squared norms for base_dataset_h
-  base_dataset_norms_h = (float *)aligned_alloc(alignment, data_num * sizeof(float));
-
-  #pragma omp parallel for
-  for (int i = 0; i < data_num; i++)
-  {
-    base_dataset_norms_h[i] = 0;
-    for (int j = 0; j < dim; j++)
-    {
-      base_dataset_norms_h[i] += base_dataset_h[i * dim + j] * base_dataset_h[i * dim + j];
-    }
-  }
-  ///
-
+  section_start_time = std::chrono::high_resolution_clock::now();
   /// copy full_dim_pca_data_h to gpu
   CHECK_CUDA_ERROR(cudaMalloc(&full_dim_pca_data_d, dim * dim * sizeof(float)));
   CHECK_CUDA_ERROR(cudaMemcpy(full_dim_pca_data_d, full_dim_pca_data_h, dim * dim * sizeof(float), cudaMemcpyHostToDevice));
-  ///
+  end_time = std::chrono::high_resolution_clock::now();
+  duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - section_start_time);
+  std::cout << "Time taken for full_dim_pca_data copy: " << duration.count() << " ms" << std::endl;
 
+  section_start_time = std::chrono::high_resolution_clock::now();
   /// allocate memory for batch_query_d, pca_batch_query_d, half_batch_query_d
   CHECK_CUDA_ERROR(cudaMalloc(&batch_query_d, max_queries_num * dim * sizeof(float)));
   CHECK_CUDA_ERROR(cudaMalloc(&remain_batch_query_d, max_queries_num * (dim - pca_dim) * sizeof(float)));
-  // CHECK_CUDA_ERROR(cudaMallocHost(&remain_batch_query_h, max_queries_num * (dim - pca_dim) * sizeof(float)));
   CHECK_CUDA_ERROR(cudaMalloc(&pca_batch_query_d, max_queries_num * pca_dim * sizeof(float)));
-  CHECK_CUDA_ERROR(cudaMalloc(&half_batch_query_d, max_queries_num * dim * sizeof(half)));
-  ///
+  end_time = std::chrono::high_resolution_clock::now();
+  duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - section_start_time);
+  std::cout << "Time taken for query memory allocation: " << duration.count() << " ms" << std::endl;
 
-  /// Initialize batch_query_d, pca_batch_query_d, half_batch_query_d to zero
-  CHECK_CUDA_ERROR(cudaMemset(batch_query_d, 0, max_queries_num * dim * sizeof(float)));
-  CHECK_CUDA_ERROR(cudaMemset(pca_batch_query_d, 0, max_queries_num * pca_dim * sizeof(float)));
-  CHECK_CUDA_ERROR(cudaMemset(half_batch_query_d, 0, max_queries_num * dim * sizeof(half)));
-  ///
-
-  // printf("flag 11\n");
-
-  /// allocate memory for alpha0_d, beta0_d
-  CHECK_CUDA_ERROR(cudaMalloc(&alpha0_d, sizeof(half)));
-  CHECK_CUDA_ERROR(cudaMalloc(&beta0_d, sizeof(half)));
-  auto alpha0 = __float2half(1.0f);
-  auto beta0 = __float2half(0.0f);
-  CHECK_CUDA_ERROR(cudaMemcpy(alpha0_d, &alpha0, sizeof(half), cudaMemcpyHostToDevice));
-  CHECK_CUDA_ERROR(cudaMemcpy(beta0_d, &beta0, sizeof(half), cudaMemcpyHostToDevice));
-  ///
-
+  section_start_time = std::chrono::high_resolution_clock::now();
   /// allocate memory for falpha_d, fbeta_d
   CHECK_CUDA_ERROR(cudaMalloc(&falpha_d, sizeof(float)));
   CHECK_CUDA_ERROR(cudaMalloc(&fbeta_d, sizeof(float)));
@@ -255,99 +389,111 @@ TrihAnnsWorker::TrihAnnsWorker(
   auto fbeta = 0.0f;
   CHECK_CUDA_ERROR(cudaMemcpy(falpha_d, &falpha, sizeof(float), cudaMemcpyHostToDevice));
   CHECK_CUDA_ERROR(cudaMemcpy(fbeta_d, &fbeta, sizeof(float), cudaMemcpyHostToDevice));
+  end_time = std::chrono::high_resolution_clock::now();
+  duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - section_start_time);
+  std::cout << "Time taken for alpha/beta allocation: " << duration.count() << " ms" << std::endl;
 
+  section_start_time = std::chrono::high_resolution_clock::now();
   /// allocate half_dists_d and half_pca_queries_d
   CHECK_CUDA_ERROR(cudaMalloc(&half_dists_d, data_num * max_queries_num * sizeof(half)));
   CHECK_CUDA_ERROR(cudaMalloc(&half_pca_queries_d, max_queries_num * pca_dim * sizeof(half)));
-  ///
+  end_time = std::chrono::high_resolution_clock::now();
+  duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - section_start_time);
+  std::cout << "Time taken for half precision buffers allocation: " << duration.count() << " ms" << std::endl;
 
-  /// intialize half_dists_d and half_pca_queries_d to zero
-  CHECK_CUDA_ERROR(cudaMemset(half_dists_d, 0, data_num * max_queries_num * sizeof(half)));
-  CHECK_CUDA_ERROR(cudaMemset(half_pca_queries_d, 0, max_queries_num * pca_dim * sizeof(half)));
-  ///
-
+  // section_start_time = std::chrono::high_resolution_clock::now();
   /// transform pca_dataset_h, pca_dataset_norms_h to half precision and copy to half_pca_dataset_d, half_pca_dataset_norms_d
-  CHECK_CUDA_ERROR(cudaMalloc(&half_pca_dataset_d, data_num * pca_dim * sizeof(half)));
-  CHECK_CUDA_ERROR(cudaMalloc(&half_pca_dataset_norms_d, data_num * max_queries_num * sizeof(half)));
-  half *half_pca_dataset_h, *half_pca_dataset_norms_h;
-  CHECK_CUDA_ERROR(cudaMallocHost(&half_pca_dataset_h, data_num * pca_dim * sizeof(half)));
-  CHECK_CUDA_ERROR(cudaMallocHost(&half_pca_dataset_norms_h, data_num * max_queries_num * sizeof(half)));
+  // CHECK_CUDA_ERROR(cudaMalloc(&half_pca_dataset_d, data_num * pca_dim * sizeof(half)));
+  // CHECK_CUDA_ERROR(cudaMalloc(&half_pca_dataset_norms_d, data_num * max_queries_num * sizeof(half)));
+  // half *half_pca_dataset_h, *half_pca_dataset_norms_h;
+  // CHECK_CUDA_ERROR(cudaMallocHost(&half_pca_dataset_h, data_num * pca_dim * sizeof(half)));
+  // CHECK_CUDA_ERROR(cudaMallocHost(&half_pca_dataset_norms_h, data_num * max_queries_num * sizeof(half)));
 
-  #pragma omp parallel for
-  for (size_t i = 0; i < data_num * pca_dim; i++)
-  {
-    half_pca_dataset_h[i] = __float2half(pca_dataset_h[i]);
-  }
+  half_pca_dataset_d = nullptr;
+  half_pca_dataset_norms_d = nullptr;
+  processDataAndNormsGPU(pca_dataset_h, half_pca_dataset_d, half_pca_dataset_norms_d, data_num, pca_dim, max_queries_num);
 
-  /// calculate squared norms for pca_dataset_h
-  float *pca_dataset_norms_h;
-  CHECK_CUDA_ERROR(cudaMallocHost(&pca_dataset_norms_h, data_num * max_queries_num * sizeof(float)));
-  // printf("flag 2\n");
-  // Calculate norms once and replicate across query_num columns
-  float *temp_norms;
-  CHECK_CUDA_ERROR(cudaMallocHost(&temp_norms, data_num * sizeof(float)));
+// #pragma omp parallel for
+//   for (size_t i = 0; i < data_num * pca_dim; i++)
+//   {
+//     half_pca_dataset_h[i] = __float2half(pca_dataset_h[i]);
+//   }
+//   end_time = std::chrono::high_resolution_clock::now();
+//   duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - section_start_time);
+//   std::cout << "Time taken for dataset half precision conversion: " << duration.count() << " ms" << std::endl;
 
-  // Calculate norms for each data point
-  #pragma omp parallel for
-  for (int i = 0; i < data_num; i++)
-  {
-    temp_norms[i] = 0;
-    for (int j = 0; j < pca_dim; j++)
-    {
-      temp_norms[i] += __half2float(half_pca_dataset_h[i * pca_dim + j]) * __half2float(half_pca_dataset_h[i * pca_dim + j]);
-      // temp_norms[i] += pca_dataset_h[i * pca_dim + j] * pca_dataset_h[i * pca_dim + j];
-    }
-  }
+  // section_start_time = std::chrono::high_resolution_clock::now();
+  // /// calculate squared norms for pca_dataset_h
+  // float *pca_dataset_norms_h;
+  // CHECK_CUDA_ERROR(cudaMallocHost(&pca_dataset_norms_h, data_num * max_queries_num * sizeof(float)));
+  // float *temp_norms;
+  // CHECK_CUDA_ERROR(cudaMallocHost(&temp_norms, data_num * sizeof(float)));
 
-  #pragma omp parallel for
-  for (int q = 0; q < max_queries_num; q++)
-  {
-    for (int i = 0; i < data_num; i++)
-    {
-      pca_dataset_norms_h[q * data_num + i] = temp_norms[i];
-    }
-  }
-  CHECK_CUDA_ERROR(cudaFreeHost(temp_norms));
-  ///
+// // Calculate norms for each data point
+// #pragma omp parallel for
+//   for (int i = 0; i < data_num; i++)
+//   {
+//     temp_norms[i] = 0;
+//     for (int j = 0; j < pca_dim; j++)
+//     {
+//       temp_norms[i] += __half2float(half_pca_dataset_h[i * pca_dim + j]) * __half2float(half_pca_dataset_h[i * pca_dim + j]);
+//     }
+//   }
 
-  #pragma omp parallel for
-  for (size_t i = 0; i < data_num * max_queries_num; i++)
-  {
-    half_pca_dataset_norms_h[i] = __float2half(pca_dataset_norms_h[i]);
-  }
-  CHECK_CUDA_ERROR(cudaMemcpy(half_pca_dataset_d, half_pca_dataset_h, data_num * pca_dim * sizeof(half), cudaMemcpyHostToDevice));
-  CHECK_CUDA_ERROR(cudaMemcpy(half_pca_dataset_norms_d, half_pca_dataset_norms_h, data_num * max_queries_num * sizeof(half), cudaMemcpyHostToDevice));
-  CHECK_CUDA_ERROR(cudaFreeHost(half_pca_dataset_h));
-  CHECK_CUDA_ERROR(cudaFreeHost(half_pca_dataset_norms_h));
-  CHECK_CUDA_ERROR(cudaFreeHost(pca_dataset_norms_h));
-  ///
+// #pragma omp parallel for
+//   for (int q = 0; q < max_queries_num; q++)
+//   {
+//     for (int i = 0; i < data_num; i++)
+//     {
+//       pca_dataset_norms_h[q * data_num + i] = temp_norms[i];
+//     }
+//   }
+//   CHECK_CUDA_ERROR(cudaFreeHost(temp_norms));
+//   end_time = std::chrono::high_resolution_clock::now();
+//   duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - section_start_time);
+//   std::cout << "Time taken for squared norm calculation: " << duration.count() << " ms" << std::endl;
 
+//   section_start_time = std::chrono::high_resolution_clock::now();
+// #pragma omp parallel for
+//   for (size_t i = 0; i < data_num * max_queries_num; i++)
+//   {
+//     half_pca_dataset_norms_h[i] = __float2half(pca_dataset_norms_h[i]);
+//   }
+//   CHECK_CUDA_ERROR(cudaMemcpy(half_pca_dataset_d, half_pca_dataset_h, data_num * pca_dim * sizeof(half), cudaMemcpyHostToDevice));
+//   CHECK_CUDA_ERROR(cudaMemcpy(half_pca_dataset_norms_d, half_pca_dataset_norms_h, data_num * max_queries_num * sizeof(half), cudaMemcpyHostToDevice));
+//   CHECK_CUDA_ERROR(cudaFreeHost(half_pca_dataset_h));
+//   CHECK_CUDA_ERROR(cudaFreeHost(half_pca_dataset_norms_h));
+//   CHECK_CUDA_ERROR(cudaFreeHost(pca_dataset_norms_h));
+//   end_time = std::chrono::high_resolution_clock::now();
+//   duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - section_start_time);
+//   std::cout << "Time taken for dataset norms copy to device: " << duration.count() << " ms" << std::endl;
+
+  section_start_time = std::chrono::high_resolution_clock::now();
   /// create cublas handle
   CHECK_CUBLAS(cublasCreate(&handle));
   CHECK_CUBLAS(cublasSetStream(handle, work_stream));
   CHECK_CUBLAS(cublasSetPointerMode(handle, CUBLAS_POINTER_MODE_DEVICE));
-  ///
+  end_time = std::chrono::high_resolution_clock::now();
+  duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - section_start_time);
+  std::cout << "Time taken for cuBLAS handle creation: " << duration.count() << " ms" << std::endl;
 
+  section_start_time = std::chrono::high_resolution_clock::now();
   /// allocate memory for reduced_dists_per_query_d, reduced_ids_per_query_d
   CHECK_CUDA_ERROR(cudaMalloc(&reduced_dists_per_query_d, reduce_group_num * max_queries_num * sizeof(half)));
   CHECK_CUDA_ERROR(cudaMalloc(&reduced_ids_per_query_d, reduce_group_num * max_queries_num * sizeof(int)));
-  ///
+  end_time = std::chrono::high_resolution_clock::now();
+  duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - section_start_time);
+  std::cout << "Time taken for reduced distances/IDs allocation: " << duration.count() << " ms" << std::endl;
 
-  /// intialize reduced_dists_per_query_d, reduced_ids_per_query_d to 0
-  CHECK_CUDA_ERROR(cudaMemset(reduced_dists_per_query_d, 0, reduce_group_num * max_queries_num * sizeof(half)));
-  CHECK_CUDA_ERROR(cudaMemset(reduced_ids_per_query_d, 0, reduce_group_num * max_queries_num * sizeof(int)));
-  ///
-
+  section_start_time = std::chrono::high_resolution_clock::now();
   /// allocate memory for phase1_distances_d, phase1_ids_d
   CHECK_CUDA_ERROR(cudaMalloc(&phase1_distances_d, max_queries_num * phase1_topk * sizeof(half)));
   CHECK_CUDA_ERROR(cudaMalloc(&phase1_ids_d, max_queries_num * phase1_topk * sizeof(int)));
-  ///
+  end_time = std::chrono::high_resolution_clock::now();
+  duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - section_start_time);
+  std::cout << "Time taken for phase1 results allocation: " << duration.count() << " ms" << std::endl;
 
-  /// initialize phase1_distances_d, phase1_ids_d to 0
-  CHECK_CUDA_ERROR(cudaMemset(phase1_distances_d, 0, max_queries_num * phase1_topk * sizeof(half)));
-  CHECK_CUDA_ERROR(cudaMemset(phase1_ids_d, 0, max_queries_num * phase1_topk * sizeof(int)));
-  ///
-
+  section_start_time = std::chrono::high_resolution_clock::now();
   /// initialize segments_offsets_d, temp_storage_d, temp_storage_bytes
   int *segments_offsets_h;
   CHECK_CUDA_ERROR(cudaMallocHost(&segments_offsets_h, (max_queries_num + 1) * sizeof(int)));
@@ -365,29 +511,29 @@ TrihAnnsWorker::TrihAnnsWorker(
 #endif
 
   CHECK_CUDA_ERROR(cudaMalloc(&temp_storage_d, temp_storage_bytes));
-  ///
+  end_time = std::chrono::high_resolution_clock::now();
+  duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - section_start_time);
+  std::cout << "Time taken for segments and temp storage setup: " << duration.count() << " ms" << std::endl;
 
-  /// allocate memory for phase1_distances_h, phase1_ids_h and phase2_ids_h
-  CHECK_CUDA_ERROR(cudaMallocHost(&phase1_distances_h, max_queries_num * phase1_topk * sizeof(half)));
-  // cudaMallocHost(&phase1_ids_h, max_queries_num * phase1_topk * sizeof(int));
-  // cudaMallocHost(&phase2_ids_h, max_queries_num * phase2_topk * sizeof(int));
-  ///
+  auto total_end_time = std::chrono::high_resolution_clock::now();
+  auto total_duration = std::chrono::duration_cast<std::chrono::milliseconds>(total_end_time - total_start_time);
+  std::cout << "Total constructor time: " << total_duration.count() << " ms" << std::endl;
 }
 
 TrihAnnsWorker::TrihAnnsWorker(
     TrihAnnsWorker &other,
     cudaStream_t work_stream_) : alpha(other.alpha),
                                  beta(other.beta),
-                                 alpha_d(other.alpha_d),
-                                 beta_d(other.beta_d),
+                                 //  alpha_d(other.alpha_d),
+                                 //  beta_d(other.beta_d),
                                  gemm_workspace(1024 * 1024 * 1024),
                                  full_dim_pca_data_d(other.full_dim_pca_data_d),
                                  full_dim_pca_data_h(other.full_dim_pca_data_h),
                                  pca_dim_pca_data_d(other.pca_dim_pca_data_d),
                                  remain_dim_pca_data_d(other.remain_dim_pca_data_d),
                                  half_pca_dim_pca_data_d(other.half_pca_dim_pca_data_d),
-                                 alpha0_d(other.alpha0_d),
-                                 beta0_d(other.beta0_d),
+                                 //  alpha0_d(other.alpha0_d),
+                                 //  beta0_d(other.beta0_d),
                                  half_pca_dataset_d(other.half_pca_dataset_d),
                                  half_pca_dataset_norms_d(other.half_pca_dataset_norms_d),
                                  segments_offsets_d(other.segments_offsets_d),
@@ -412,7 +558,7 @@ TrihAnnsWorker::TrihAnnsWorker(
   /// allocate memory for batch_query_d, pca_batch_query_d, half_batch_query_d
   cudaMalloc(&batch_query_d, max_queries_num * dim * sizeof(float));
   cudaMalloc(&pca_batch_query_d, max_queries_num * pca_dim * sizeof(float));
-  cudaMalloc(&half_batch_query_d, max_queries_num * dim * sizeof(half));
+  // cudaMalloc(&half_batch_query_d, max_queries_num * dim * sizeof(half));
 
   cudaMalloc(&remain_batch_query_d, max_queries_num * (dim - pca_dim) * sizeof(float));
   // cudaMallocHost(&remain_batch_query_h, max_queries_num * (dim - pca_dim) * sizeof(float));

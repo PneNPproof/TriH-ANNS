@@ -40,6 +40,7 @@ atomic<int> query_batch_counter(0);
 int main(int argc, char *argv[])
 {
     const char *data_dir = "/Trih/dataset/dataset_shuffle";
+    // const char *data_dir = "/Trih/dataset/dataset_expand";
     const char *index_dir = "/paper_experiment/index";
 
     char filename[100];
@@ -104,6 +105,8 @@ int main(int argc, char *argv[])
 
         ifs.close();
 
+        auto start_time = std::chrono::high_resolution_clock::now();
+
         int query_batch_size = atoi(argv[4]);
         int phase1_topk = atoi(argv[5]); // 每个section 获取 top1之后，top_k 指定筛选多少
         int phase2_topk = atoi(argv[6]);
@@ -155,6 +158,10 @@ int main(int argc, char *argv[])
         printf("create workers done\n");
         #endif
         ///
+
+        auto end_time = std::chrono::high_resolution_clock::now();
+        auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
+        std::cout << "search build time: " << duration.count() << " ms" << std::endl;
 
         /// prepare query batch
         int batch_num_per_worker = atoi(argv[9]);
