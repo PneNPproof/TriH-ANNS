@@ -1,1 +1,0 @@
-export ALL_PROXY=socks5://localhost:10815
