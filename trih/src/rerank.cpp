@@ -242,6 +242,12 @@ void re_rank2(
 ) 
 {
   float distances_buffer[1024];
+
+  // print phase1_topk_ids
+//   printf("\nphase1_topk_ids:\n");
+//   for (int i=0; i<phase1_topk; i++) {
+//     printf("phase1_topk_ids[%d]: %d\n", i, phase1_topk_ids[i]);
+//   }
   
   for (int i=0; i<phase1_topk; i++) {
     int id = phase1_topk_ids[i];

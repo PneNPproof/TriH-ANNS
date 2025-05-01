@@ -40,7 +40,7 @@ atomic<int> query_batch_counter(0);
 int main(int argc, char *argv[])
 {
     const char *data_dir = "/Trih/dataset/dataset_shuffle";
-    // const char *data_dir = "/Trih/dataset/dataset_expand";
+    // const char *data_dir = "/Trih";
     const char *index_dir = "/paper_experiment/index";
 
     char filename[100];
@@ -161,7 +161,10 @@ int main(int argc, char *argv[])
 
         auto end_time = std::chrono::high_resolution_clock::now();
         auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
+
+        #ifdef DETAILED_LOG
         std::cout << "search build time: " << duration.count() << " ms" << std::endl;
+        #endif
 
         /// prepare query batch
         int batch_num_per_worker = atoi(argv[9]);
@@ -208,18 +211,18 @@ int main(int argc, char *argv[])
         // cudaEvent_t syncEvent;
         // cudaEventCreate(&syncEvent);
 
-        workers[0]->batch_query_search(
-            warmup_batch_query,
-            query_batch_size,
-            candidate_topk_dists_1,
-            candidate_topk_ids_1,
-            topk_ids_1,
-            remain_batch_query_1,
-            quant_queries_1,
-            // syncEvent,
-            false);
-        // rerank_task_scheduler_pool.wait();
-        rr_pool->wait();
+        // workers[0]->batch_query_search(
+        //     warmup_batch_query,
+        //     query_batch_size,
+        //     candidate_topk_dists_1,
+        //     candidate_topk_ids_1,
+        //     topk_ids_1,
+        //     remain_batch_query_1,
+        //     quant_queries_1,
+        //     // syncEvent,
+        //     false);
+        
+        // rr_pool->wait();
 
         #ifdef DETAILED_LOG
         printf("warm up done\n");

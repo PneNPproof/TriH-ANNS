@@ -115,12 +115,21 @@ void save_pca_index(float *data, int dim, int record_num, //原始数据
     auto duration1 = std::chrono::duration_cast<std::chrono::milliseconds>(end_time1 - start_time);
     std::cout << "Time taken for pca: " << duration1.count() << " ms" << std::endl;
     
-    // transpose pca_data
+    /// transpose pca_data
     for (int i = 0; i < dim; ++i) {
         for (int j = i + 1; j < dim; ++j) {
             std::swap(pca_data[i * dim + j], pca_data[j * dim + i]);
         }
     }
+    ///
+
+    /// right shift value of pca_data
+    // for (int i = 0; i < dim; ++i) {
+    //     for (int j = 0; j < dim; ++j) {
+    //         pca_data[i * dim + j] = pca_data[i * dim + j] / 256;
+    //     }
+    // }
+    ///
 
     try {
         projectPCA_CUDA(data, pca_data, trans_data, trans_data_remain, record_num, dim, column_num);

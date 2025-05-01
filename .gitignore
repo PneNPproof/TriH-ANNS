@@ -46,8 +46,14 @@ raft_install/
 
 examples/
 test/
+test_raft/
 anns_results/
 library/
 profiler/
 
 index/
+conda/
+pytool/
+
+*.sh
+refine.md

@@ -43,6 +43,7 @@ data load_h5(const char *filename)
 
     //neighbors
     dataset_id = H5Dopen(file_id, "neighbors", H5P_DEFAULT);
+    // dataset_id = H5Dopen(file_id, "neighbor_indices", H5P_DEFAULT);
     dataspace_id = H5Dget_space(dataset_id);
     H5Sget_simple_extent_dims(dataspace_id, dims, NULL);
 
