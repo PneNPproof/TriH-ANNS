@@ -1,3 +1,29 @@
+/**
+ * @file distance.h
+ * @brief Highly optimized distance computation functions using SIMD instructions
+ * 
+ * This header provides multiple implementations of Euclidean distance computation
+ * optimized for different CPU architectures and instruction sets:
+ * 
+ * - Basic scalar implementation for compatibility
+ * - AVX2 optimized versions with loop unrolling and prefetching
+ * - AVX-512 implementations for latest Intel CPUs
+ * - Specialized dot product functions for quantized data
+ * 
+ * The implementations leverage modern CPU features for maximum performance:
+ * - SIMD instructions (AVX2, AVX-512) for parallel computation
+ * - Loop unrolling to reduce branch overhead
+ * - Memory prefetching to hide latency
+ * - Multiple accumulators to break dependency chains
+ * 
+ * These functions are critical for the CPU reranking phase where precise
+ * distances must be computed efficiently for candidate filtering.
+ * 
+ * Dependencies:
+ * - Intel intrinsics for SIMD operations
+ * - Properly aligned memory (64-byte alignment recommended)
+ */
+
 #ifndef __DISTANCE__
 #define __DISTANCE__
 
@@ -5,8 +31,20 @@
 #include <math.h>
 #include <immintrin.h>
 
-
-//计算2点之间的l2距离
+/**
+ * @brief Basic scalar Euclidean distance computation
+ * 
+ * Computes L2 (Euclidean) distance between two vectors using simple scalar operations.
+ * This is the baseline implementation that works on all architectures but is not optimized.
+ * 
+ * @param a First vector
+ * @param b Second vector  
+ * @param dimension Vector dimensionality
+ * @return Squared Euclidean distance (||a - b||²)
+ * 
+ * @note Returns squared distance to avoid expensive sqrt operation
+ * @note Use optimized SIMD versions when available for better performance
+ */
 static inline float euclideanDistance(const float a[], const float b[], int dimension) {
     float sum = 0.0;
     float tmp;
@@ -18,33 +56,48 @@ static inline float euclideanDistance(const float a[], const float b[], int dime
     return sum;
 }
 
-
-//采用avx求L2距离
+/**
+ * @brief AVX2-optimized Euclidean distance with loop unrolling
+ * 
+ * High-performance implementation using AVX2 instructions with:
+ * - 4-way loop unrolling to break dependency chains
+ * - Memory prefetching to hide memory latency
+ * - Vectorized operations processing 8 floats per instruction
+ * 
+ * @param vec1 First vector (must be 32-byte aligned)
+ * @param vec2 Second vector (must be 32-byte aligned)
+ * @param dim Vector dimensionality (should be multiple of 32 for optimal performance)
+ * @return Squared Euclidean distance
+ * 
+ * @note Requires AVX2 support - check with cpuid before using
+ * @note Input vectors should be 32-byte aligned for optimal performance
+ * @note Dimension should be multiple of 32 to avoid scalar cleanup code
+ */
 static inline float euclideanDistance_avx(
-    const float* __restrict vec1,  // 向量1 [ALIGN64]
-    const float* __restrict vec2,  // 向量2 [ALIGN64]
-    int dim                   // 向量维度
+    const float* __restrict vec1,  // Vector 1 [ALIGN64]
+    const float* __restrict vec2,  // Vector 2 [ALIGN64]
+    int dim                        // Vector dimension
 ) {
     size_t i = 0;
-    const size_t simd_width = 8; // AVX处理8个float
-    const size_t unroll_factor = 4; // 展开因子
+    const size_t simd_width = 8;      // AVX processes 8 floats
+    const size_t unroll_factor = 4;   // Unroll factor to break dependencies
 
-    // 使用4个独立累加器打破依赖链
+    // Use 4 independent accumulators to break dependency chains
     __m256 acc0 = _mm256_setzero_ps();
     __m256 acc1 = _mm256_setzero_ps();
     __m256 acc2 = _mm256_setzero_ps();
     __m256 acc3 = _mm256_setzero_ps();
 
-    // 主循环：每次处理32个元素（4组x8元素）
+    // Main loop: process 32 elements per iteration (4 groups x 8 elements)
     size_t block_size = unroll_factor * simd_width;
     size_t num_blocks = dim / block_size;
     
     for (size_t block = 0; block < num_blocks; ++block) {
-        // 预取下个block数据（提前预取256字节）
+        // Prefetch next block data (256 bytes ahead)
         _mm_prefetch((const char*)(vec1 + i + 64), _MM_HINT_T0);
         _mm_prefetch((const char*)(vec2 + i + 64), _MM_HINT_T0);
 
-        // 加载4组数据
+        // Load 4 groups of data and compute differences
         __m256 v1_0 = _mm256_load_ps(vec1 + i);
         __m256 v2_0 = _mm256_load_ps(vec2 + i);
         __m256 diff0 = _mm256_sub_ps(v1_0, v2_0);

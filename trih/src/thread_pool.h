@@ -1,3 +1,22 @@
+/**
+ * @file thread_pool.h
+ * @brief Legacy thread pool implementation (C++11 compatible)
+ * 
+ * This header provides an alternative thread pool implementation that is
+ * compatible with older C++ standards (C++11). While the system primarily
+ * uses thread_pool_v2.h which requires C++17, this version may be used
+ * for compatibility with older compilers or build environments.
+ * 
+ * Key differences from thread_pool_v2.h:
+ * - Uses std::result_of instead of std::invoke_result_t (C++11 compatible)
+ * - May have slightly different performance characteristics
+ * - Maintains compatibility with older C++ standard libraries
+ * 
+ * Dependencies:
+ * - C++11 standard library components
+ * - Standard threading library
+ */
+
 #ifndef THREAD_POOL_H
 #define THREAD_POOL_H
 
@@ -11,23 +30,53 @@
 #include <functional>
 #include <stdexcept>
 
+/**
+ * @brief C++11 compatible thread pool implementation
+ * 
+ * Legacy thread pool class that provides similar functionality to
+ * thread_pool_v2.h but with C++11 compatibility. Maintains a fixed
+ * number of worker threads for asynchronous task execution.
+ */
 class ThreadPool {
 public:
+    /**
+     * @brief Constructor - creates specified number of worker threads
+     * 
+     * @param threads Number of worker threads to create
+     */
     ThreadPool(size_t);
+    
+    /**
+     * @brief Submit task for asynchronous execution
+     * 
+     * C++11 compatible version using std::result_of for type deduction.
+     * 
+     * @tparam F Callable type
+     * @tparam Args Argument types
+     * @param f Callable to execute
+     * @param args Arguments for the callable
+     * @return std::future for the result
+     */
     template<class F, class... Args>
     auto enqueue(F&& f, Args&&... args) 
         -> std::future<typename std::result_of<F(Args...)>::type>;
-    ~ThreadPool();
-private:
-    // need to keep track of threads so we can join them
-    std::vector< std::thread > workers;
-    // the task queue
-    std::queue< std::function<void()> > tasks;
     
-    // synchronization
-    std::mutex queue_mutex;
-    std::condition_variable condition;
-    bool stop;
+    /**
+     * @brief Destructor - stops all threads and waits for completion
+     */
+    ~ThreadPool();
+    
+private:
+    // Worker thread management
+    std::vector< std::thread > workers;        ///< Pool of worker threads
+    
+    // Task queue
+    std::queue< std::function<void()> > tasks; ///< FIFO task queue
+    
+    // Synchronization primitives
+    std::mutex queue_mutex;                    ///< Protects task queue
+    std::condition_variable condition;         ///< Signals task availability
+    bool stop;                                 ///< Shutdown flag
 };
  
 // the constructor just launches some amount of workers

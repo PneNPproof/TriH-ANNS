@@ -1,3 +1,21 @@
+/**
+ * @file rerank.cpp
+ * @brief Implementation of reranking algorithms for improving search accuracy in TriH-ANNS
+ * 
+ * This file implements two-phase search reranking functionality:
+ * - Phase 1: Fast approximate search using reduced-dimension PCA space
+ * - Phase 2: Precise reranking using full-precision distance calculation
+ * 
+ * Key features:
+ * - SIMD-optimized inner product computation using AVX-512
+ * - Efficient top-k selection using max-heap algorithms
+ * - Distance compensation for scalar quantized data
+ * - Template-based implementation for different data types
+ * 
+ * The reranking process improves search accuracy by computing exact distances
+ * for a small set of candidates identified in the first phase.
+ */
+
 #include <cstdlib>
 #include <cstring>
 #include <immintrin.h>
@@ -11,7 +29,18 @@
 #include "sq.h"
 #include "distance.h"
 
-// Scalar version of inner_product function without SIMD instructions
+/**
+ * @brief Scalar implementation of inner product without SIMD optimization
+ * 
+ * Computes the dot product of two vectors using simple scalar operations.
+ * This serves as a fallback implementation when SIMD is not available
+ * or for comparison/debugging purposes.
+ * 
+ * @param a First input vector
+ * @param b Second input vector  
+ * @param d Vector dimension
+ * @return Dot product of vectors a and b
+ */
 float inner_product_scalar(
     const float* __restrict__ a, 
     const float* __restrict__ b, 
@@ -28,24 +57,43 @@ float inner_product_scalar(
     return sum;
 }
 
+/**
+ * @brief SIMD-optimized inner product using AVX-512 instructions
+ * 
+ * Computes the dot product of two vectors using AVX-512 vectorization
+ * for maximum performance. Processes 64 elements per iteration (4 × 16-element vectors)
+ * and handles remaining elements with masked operations.
+ * 
+ * Requirements:
+ * - Input vectors must be 64-byte aligned for optimal performance
+ * - AVX-512 support required on target CPU
+ * 
+ * @param a First input vector (must be aligned)
+ * @param b Second input vector (must be aligned)
+ * @param d Vector dimension
+ * @return Dot product of vectors a and b
+ */
 float inner_product(
     const float* __restrict__ a, 
     const float* __restrict__ b, 
     int d
 ) 
 {
-    constexpr int vec_size = 16;
+    constexpr int vec_size = 16; // AVX-512 processes 16 floats per vector
     const float* a_ptr = a;
     const float* b_ptr = b;
     
+    // Initialize four accumulator vectors for unrolled computation
     __m512 sum0 = _mm512_setzero_ps();
     __m512 sum1 = _mm512_setzero_ps();
     __m512 sum2 = _mm512_setzero_ps();
     __m512 sum3 = _mm512_setzero_ps();
 
-    // 主循环处理4*16=64个元素/迭代
+    // Main loop processes 64 elements per iteration (4 × 16)
     int main_loop_count = d / (vec_size * 4);
     while (main_loop_count--) {
+        // Load 4 vectors from each input array
+        // Load 4 vectors from each input array
         __m512 a0 = _mm512_load_ps(a_ptr);
         __m512 a1 = _mm512_load_ps(a_ptr + vec_size);
         __m512 a2 = _mm512_load_ps(a_ptr + vec_size*2);
@@ -56,20 +104,22 @@ float inner_product(
         __m512 b2 = _mm512_load_ps(b_ptr + vec_size*2);
         __m512 b3 = _mm512_load_ps(b_ptr + vec_size*3);
         
+        // Fused multiply-add operations for each vector pair
         sum0 = _mm512_fmadd_ps(a0, b0, sum0);
         sum1 = _mm512_fmadd_ps(a1, b1, sum1);
         sum2 = _mm512_fmadd_ps(a2, b2, sum2);
         sum3 = _mm512_fmadd_ps(a3, b3, sum3);
         
+        // Advance pointers to next block
         a_ptr += vec_size*4;
         b_ptr += vec_size*4;
     }
 
-    // 合并累加器
+    // Combine all accumulator vectors
     sum0 = _mm512_add_ps(sum0, _mm512_add_ps(sum1, sum2));
     sum0 = _mm512_add_ps(sum0, sum3);
 
-    // 处理剩余16的倍数部分
+    // Handle remaining 16-element blocks
     int remaining = d % (vec_size * 4);
     while (remaining >= vec_size) {
         __m512 a_vec = _mm512_load_ps(a_ptr);
@@ -80,7 +130,7 @@ float inner_product(
         remaining -= vec_size;
     }
 
-    // 处理尾部元素
+    // Handle remaining elements with masked load
     if (remaining > 0) {
         __mmask16 mask = (1U << remaining) - 1;
         __m512 a_vec = _mm512_maskz_loadu_ps(mask, a_ptr);
@@ -88,21 +138,35 @@ float inner_product(
         sum0 = _mm512_fmadd_ps(a_vec, b_vec, sum0);
     }
 
+    // Horizontal sum of all elements in the vector
     return _mm512_reduce_add_ps(sum0);
 }
 
 
-// 最大堆调整（基于结构体内部缓存的距离值）
+/**
+ * @brief Maintain max-heap property for heap-based selection algorithm
+ * 
+ * Ensures the max-heap property is maintained by comparing a node with its
+ * children and swapping if necessary. Used in the heap-based top-k selection.
+ * 
+ * @tparam T Data type for distance values
+ * @param heap Array representing the max-heap
+ * @param size Current size of the heap
+ * @param pos Position/index to start heapifying from
+ */
 template<typename T>
 static void max_heapify(HeapElement<T>* heap, int size, int pos) {
     int largest = pos;
-    int left = 2 * pos + 1;
-    int right = 2 * pos + 2;
+    int left = 2 * pos + 1;   // Left child index
+    int right = 2 * pos + 2;  // Right child index
 
+    // Find the largest among parent and children
     if (left < size && heap[left].distance > heap[largest].distance)
         largest = left;
     if (right < size && heap[right].distance > heap[largest].distance)
         largest = right;
+        
+    // If largest is not the parent, swap and continue heapifying
     if (largest != pos) {
         HeapElement<T> temp = heap[pos];
         heap[pos] = heap[largest];
@@ -111,20 +175,40 @@ static void max_heapify(HeapElement<T>* heap, int size, int pos) {
     }
 }
 
-// 构建最大堆
+/**
+ * @brief Build a max-heap from an unordered array
+ * 
+ * Converts an array of HeapElement into a valid max-heap structure
+ * by calling max_heapify on all non-leaf nodes.
+ * 
+ * @tparam T Data type for distance values
+ * @param heap Array to be converted to max-heap
+ * @param size Size of the array
+ */
 template<typename T>
 static void build_max_heap(HeapElement<T>* heap, int size) {
+    // Start from the last non-leaf node and heapify upwards
     for (int i = size / 2 - 1; i >= 0; i--)
         max_heapify(heap, size, i);
 }
 
-// 插入排序（针对小数据量优化）
+/**
+ * @brief Insertion sort optimized for small arrays
+ * 
+ * Performs insertion sort on HeapElement array, sorting by distance values.
+ * This is more efficient than heap sort for small arrays (typically < 64 elements).
+ * 
+ * @tparam T Data type for distance values
+ * @param arr Array to be sorted
+ * @param size Size of the array
+ */
 template<typename T>
 static void insertion_sort(HeapElement<T>* arr, int size) {
     for (int i = 1; i < size; ++i) {
         HeapElement<T> key = arr[i];
         int j = i - 1;
         
+        // Shift elements greater than key to the right
         while (j >= 0 && arr[j].distance > key.distance) {
             arr[j + 1] = arr[j];
             j--;
@@ -263,18 +347,60 @@ void re_rank2(
 }
 
 
+/**
+ * @brief Optimized distance compensation using precomputed quantization data
+ * 
+ * Computes distance compensation for scalar quantized data using AVX-512
+ * optimized dot product operations. This version works with precomputed
+ * quantization parameters to minimize runtime overhead.
+ * 
+ * Formula: dist = ||x||² - 2⟨q_quant, x_quant⟩_scaled + constant_terms
+ * 
+ * @param qq Quantized query vector
+ * @param min_q Minimum value used for query quantization
+ * @param sum_qq Sum of all elements in quantized query
+ * @param scale_q Scale factor for query quantization
+ * @param dim Dimension of the compensation space
+ * @param sq Precomputed quantization info for the data point
+ * @return Compensated distance value
+ */
 float distance_compensation_sq_precomputing_avx(uint8_t *qq, float min_q, uint32_t sum_qq, float scale_q, int dim, sq_info &sq) {
-    float dist = sq.xx;
+    float dist = sq.xx; // Precomputed ||x||²
 
-    // uint32_t tmp = dot_product(qq, sq.quant_x_uint8, dim);
-    // uint32_t tmp = dot_product_uint8(qq, sq.quant_x_uint8, dim);//王哲
+    // Compute quantized dot product using AVX-512 optimization
     uint32_t tmp = dot_product_uint8_avx512(qq, sq.quant_x_uint8, dim);
     
+    // Apply full distance compensation formula
     dist -= 2*(sq.scale * scale_q * tmp + scale_q * sq.min * sum_qq + sq.scale * min_q * sq.sum_quant_x + min_q * sq.min * dim);
     
     return dist;
 }
 
+/**
+ * @brief Reranking with scalar quantization and distance compensation
+ * 
+ * Performs second-phase reranking using scalar quantization for the remaining
+ * dimensions after PCA projection. This version uses precomputed quantization
+ * information and half-precision distances from the first phase.
+ * 
+ * Process:
+ * 1. Quantize the query's remaining dimensions
+ * 2. Apply distance compensation for each candidate
+ * 3. Select top-k results from compensated distances
+ * 
+ * @param query Original full-precision query vector
+ * @param quant_query Buffer for quantized query (remaining dimensions)
+ * @param query_remain Query vector's remaining dimensions after PCA
+ * @param dim Total dimension of vectors
+ * @param pca_dim Number of PCA dimensions
+ * @param p_sq_info Array of precomputed scalar quantization info
+ * @param phase1_topk_dists Distances from first phase (half precision)
+ * @param phase1_topk_ids Candidate IDs from first phase
+ * @param phase1_topk Number of candidates from first phase
+ * @param phase2_topk_ids Output array for final selected IDs
+ * @param phase2_topk Number of final results to select
+ * @return 0 on success
+ */
 int re_rank(
     float *query,
     uint8_t *quant_query,
@@ -291,21 +417,22 @@ int re_rank(
 {
     std::vector<float> distances(phase1_topk);
 
-    //针对query remain 进行量化
+    // Quantize query's remaining dimensions
     float min_q, max_q, scale_q;
-    // uint8_t *qq = static_cast<uint8_t*>(aligned_alloc(64, index.dim-index.column_num));
     scalar_quantize(query_remain, quant_query, dim - pca_dim, 8, &min_q, &max_q, &scale_q);
+    
+    // Precompute sum of quantized query for optimization
     uint32_t sum_qq = 0;
     for(int i=0; i<dim - pca_dim; i++) sum_qq += quant_query[i];
 
-    //距离补偿
-    // #pragma omp parallel for
+    // Apply distance compensation for each candidate
     for(int i=0; i<phase1_topk; i++) {
-        // printf("phase1_topk_ids[%d]: %d\n", i, phase1_topk_ids[i]);
-        distances[i] = __half2float(phase1_topk_dists[i]) + distance_compensation_sq_precomputing_avx(quant_query, min_q, sum_qq, scale_q, dim - pca_dim, p_sq_info[phase1_topk_ids[i]]);
+        distances[i] = __half2float(phase1_topk_dists[i]) + 
+                      distance_compensation_sq_precomputing_avx(quant_query, min_q, sum_qq, scale_q, 
+                                                              dim - pca_dim, p_sq_info[phase1_topk_ids[i]]);
     }
 
-    //重新排序，获取最终结果
+    // Select final top-k results
     get_min_k_ids(distances.data(), phase1_topk_ids, phase1_topk, phase2_topk, phase2_topk_ids, (float*)NULL);
 
     return 0;
