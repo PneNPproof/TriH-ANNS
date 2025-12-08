@@ -1,0 +1,35 @@
+{
+  "version": 10,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 26,
+    "patch": 4
+  },
+  "configurePresets": [
+    {
+      "name": "TriH_configure",
+      "displayName": "TriH_configure",
+      "description": "configure presets for TriH",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build",
+      "cacheVariables": {
+        "CMAKE_INSTALL_PREFIX": "${sourceDir}/install",
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "CMAKE_VERBOSE_MAKEFILE": "ON",
+        "ENABLE_DETAILED_LOG": "OFF"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "TriH_build",
+      "description": "TriH_build",
+      "displayName": "criH_build",
+      "configurePreset": "TriH_configure",
+      "verbose": true,
+      "jobs": 24,
+      "targets": ["all", "install"]
+    }
+  ]
+}
